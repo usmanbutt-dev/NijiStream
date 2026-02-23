@@ -14,6 +14,8 @@ import '../../features/browse/browse_screen.dart';
 import '../../features/library/library_screen.dart';
 import '../../features/downloads/downloads_screen.dart';
 import '../../features/settings/settings_screen.dart';
+import '../../features/settings/extension_management_screen.dart';
+import '../../features/anime/anime_detail_screen.dart';
 import '../utils/platform_utils.dart';
 
 /// Route path constants — avoids typos and enables easy refactoring.
@@ -115,6 +117,25 @@ final appRouter = GoRouter(
           ),
         ),
       ],
+    ),
+
+    // ── Anime Detail (full-screen, outside shell) ──
+    GoRoute(
+      path: '/anime/:extensionId/:animeId',
+      builder: (context, state) {
+        final extensionId = state.pathParameters['extensionId']!;
+        final animeId = state.pathParameters['animeId']!;
+        return AnimeDetailScreen(
+          extensionId: extensionId,
+          animeId: animeId,
+        );
+      },
+    ),
+
+    // ── Extension Management ──
+    GoRoute(
+      path: '/settings/extensions',
+      builder: (context, state) => const ExtensionManagementScreen(),
     ),
   ],
 );

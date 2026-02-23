@@ -2,6 +2,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
@@ -36,9 +37,7 @@ class SettingsScreen extends StatelessWidget {
             icon: Icons.extension_rounded,
             title: 'Manage Extensions',
             subtitle: 'Browse repos, install & update extensions',
-            onTap: () {
-              // TODO: Navigate to extension settings
-            },
+            onTap: () => context.push('/settings/extensions'),
           ),
           const Divider(),
 
