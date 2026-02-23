@@ -1,0 +1,69 @@
+name: nijistream
+description: "Your anime, everywhere."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State Management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # Navigation
+  go_router: ^15.1.2
+
+  # Database (SQLite)
+  drift: ^2.23.1
+  sqlite3_flutter_libs: ^0.5.28
+
+  # Key-Value Store
+  shared_preferences: ^2.5.3
+
+  # Networking
+  dio: ^5.7.0
+
+  # Image Caching
+  cached_network_image: ^3.4.1
+
+  # Animations
+  flutter_animate: ^4.5.2
+
+  # Typography
+  google_fonts: ^6.2.1
+
+  # Icons
+  iconsax_flutter: ^1.0.0
+
+  # Path utilities
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  # JS Engine (Extension Runtime)
+  flutter_js: ^0.8.7
+
+  # HTML Parsing (for extension bridge)
+  html: ^0.15.5
+
+  # Crypto utilities (for extension bridge)
+  crypto: ^3.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+  # Code generation for drift and riverpod
+  drift_dev: ^2.23.1
+  build_runner: ^2.4.14
+  riverpod_generator: ^2.6.3
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
