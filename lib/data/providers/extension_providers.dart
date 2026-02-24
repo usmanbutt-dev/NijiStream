@@ -158,6 +158,19 @@ class SearchNotifier extends StateNotifier<SearchState> {
     }
   }
 
+  /// Filter results to a specific extension (null = all).
+  void setSourceFilter(String? extensionId) {
+    state = state.copyWith(
+      sourceFilter: extensionId,
+      clearSourceFilter: extensionId == null,
+    );
+  }
+
+  /// Change the sort order of the current results.
+  void setSortOrder(SearchSortOrder order) {
+    state = state.copyWith(sortOrder: order);
+  }
+
   /// Clear search results.
   void clear() {
     state = const SearchState();
@@ -177,13 +190,24 @@ class SearchResultWithSource {
   });
 }
 
+/// Sort order for search results.
+enum SearchSortOrder { relevance, titleAsc, titleDesc, source }
+
 /// Immutable search state.
 class SearchState {
   final bool isSearching;
   final String query;
+
+  /// All unfiltered results across all extensions.
   final List<SearchResultWithSource> results;
+
   final bool hasResults;
   final String? error;
+
+  /// null = show all sources; otherwise only this extensionId.
+  final String? sourceFilter;
+
+  final SearchSortOrder sortOrder;
 
   const SearchState({
     this.isSearching = false,
@@ -191,7 +215,40 @@ class SearchState {
     this.results = const [],
     this.hasResults = false,
     this.error,
+    this.sourceFilter,
+    this.sortOrder = SearchSortOrder.relevance,
   });
+
+  /// Results after applying [sourceFilter] and [sortOrder].
+  List<SearchResultWithSource> get filteredResults {
+    var list = results;
+
+    // Source filter
+    if (sourceFilter != null) {
+      list = list.where((r) => r.extensionId == sourceFilter).toList();
+    }
+
+    // Sort
+    switch (sortOrder) {
+      case SearchSortOrder.titleAsc:
+        list = [...list]
+          ..sort((a, b) => a.result.title.compareTo(b.result.title));
+      case SearchSortOrder.titleDesc:
+        list = [...list]
+          ..sort((a, b) => b.result.title.compareTo(a.result.title));
+      case SearchSortOrder.source:
+        list = [...list]
+          ..sort((a, b) => a.extensionName.compareTo(b.extensionName));
+      case SearchSortOrder.relevance:
+        break; // keep original order
+    }
+
+    return list;
+  }
+
+  /// Unique extension IDs present in current results.
+  List<String> get availableSourceIds =>
+      results.map((r) => r.extensionId).toSet().toList();
 
   SearchState copyWith({
     bool? isSearching,
@@ -199,6 +256,9 @@ class SearchState {
     List<SearchResultWithSource>? results,
     bool? hasResults,
     String? error,
+    String? sourceFilter,
+    bool clearSourceFilter = false,
+    SearchSortOrder? sortOrder,
   }) {
     return SearchState(
       isSearching: isSearching ?? this.isSearching,
@@ -206,6 +266,8 @@ class SearchState {
       results: results ?? this.results,
       hasResults: hasResults ?? this.hasResults,
       error: error,
+      sourceFilter: clearSourceFilter ? null : (sourceFilter ?? this.sourceFilter),
+      sortOrder: sortOrder ?? this.sortOrder,
     );
   }
 }

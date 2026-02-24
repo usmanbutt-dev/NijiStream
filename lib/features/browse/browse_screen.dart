@@ -2,8 +2,9 @@
 ///
 /// This is the primary discovery screen. It features:
 /// - A search bar in the app bar
-/// - A grid of anime results from loaded extensions
-/// - Empty states for no extensions or no results
+/// - Source filter chips (one per loaded extension) + an "All" chip
+/// - A sort dropdown (relevance, A→Z, Z→A, by source)
+/// - A responsive grid of anime results
 /// - Pull-to-refresh for re-querying
 library;
 
@@ -14,6 +15,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/colors.dart';
 import '../../data/providers/extension_providers.dart';
+import '../../extensions/models/extension_manifest.dart';
 
 class BrowseScreen extends ConsumerStatefulWidget {
   const BrowseScreen({super.key});
@@ -59,6 +61,16 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
           isSearching: searchState.isSearching,
         ),
         toolbarHeight: 64,
+        // Show filter row only when there are results
+        bottom: searchState.hasResults && !searchState.isSearching
+            ? PreferredSize(
+                preferredSize: const Size.fromHeight(44),
+                child: _FilterRow(
+                  searchState: searchState,
+                  loadedExtensions: extensionState.loadedExtensions,
+                ),
+              )
+            : null,
       ),
       body: _buildBody(theme, extensionState, searchState),
     );
@@ -93,17 +105,170 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       );
     }
 
-    // Search results
+    // Search results (filtered)
     if (searchState.hasResults) {
-      if (searchState.results.isEmpty) {
-        return _NoResultsView(theme: theme, query: searchState.query);
+      final filtered = searchState.filteredResults;
+      if (filtered.isEmpty) {
+        return _NoResultsView(
+          theme: theme,
+          query: searchState.query,
+          hasSourceFilter: searchState.sourceFilter != null,
+        );
       }
-      return _AnimeGrid(results: searchState.results);
+      return _AnimeGrid(results: filtered);
     }
 
     // Default: prompt to search
     return _DefaultBrowseView(theme: theme);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Filter Row — source chips + sort button
+// ═══════════════════════════════════════════════════════════════════
+
+class _FilterRow extends ConsumerWidget {
+  final SearchState searchState;
+  final List<ExtensionManifest> loadedExtensions;
+
+  const _FilterRow({
+    required this.searchState,
+    required this.loadedExtensions,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(searchNotifierProvider.notifier);
+    final theme = Theme.of(context);
+
+    // Build a name map from loaded extensions
+    final nameMap = {for (final m in loadedExtensions) m.id: m.name};
+
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        scrollDirection: Axis.horizontal,
+        children: [
+          // ── "All sources" chip ──
+          Padding(
+            padding: const EdgeInsets.only(right: 8, top: 6, bottom: 6),
+            child: ChoiceChip(
+              label: const Text('All'),
+              selected: searchState.sourceFilter == null,
+              onSelected: (_) => notifier.setSourceFilter(null),
+              selectedColor: theme.colorScheme.primaryContainer,
+              labelStyle: TextStyle(
+                color: searchState.sourceFilter == null
+                    ? theme.colorScheme.primary
+                    : NijiColors.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ),
+
+          // ── Per-source chips ──
+          ...searchState.availableSourceIds.map((id) {
+            final isSelected = searchState.sourceFilter == id;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8, top: 6, bottom: 6),
+              child: ChoiceChip(
+                label: Text(nameMap[id] ?? id),
+                selected: isSelected,
+                onSelected: (_) =>
+                    notifier.setSourceFilter(isSelected ? null : id),
+                selectedColor: theme.colorScheme.primaryContainer,
+                labelStyle: TextStyle(
+                  color: isSelected
+                      ? theme.colorScheme.primary
+                      : NijiColors.textSecondary,
+                  fontSize: 12,
+                ),
+              ),
+            );
+          }),
+
+          // ── Sort button ──
+          Padding(
+            padding: const EdgeInsets.only(left: 4, top: 6, bottom: 6),
+            child: _SortButton(sortOrder: searchState.sortOrder),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Sort Button
+// ═══════════════════════════════════════════════════════════════════
+
+class _SortButton extends ConsumerWidget {
+  final SearchSortOrder sortOrder;
+
+  const _SortButton({required this.sortOrder});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(searchNotifierProvider.notifier);
+    final theme = Theme.of(context);
+
+    return PopupMenuButton<SearchSortOrder>(
+      initialValue: sortOrder,
+      onSelected: notifier.setSortOrder,
+      color: NijiColors.surface,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          border: Border.all(color: NijiColors.divider),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.sort_rounded, size: 14, color: NijiColors.textSecondary),
+            const SizedBox(width: 4),
+            Text(
+              _sortLabel(sortOrder),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: NijiColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+      ),
+      itemBuilder: (context) => [
+        _sortItem(SearchSortOrder.relevance, 'Relevance', Icons.star_rounded),
+        _sortItem(SearchSortOrder.titleAsc, 'Title A→Z', Icons.sort_by_alpha_rounded),
+        _sortItem(SearchSortOrder.titleDesc, 'Title Z→A', Icons.sort_by_alpha_rounded),
+        _sortItem(SearchSortOrder.source, 'By Source', Icons.extension_rounded),
+      ],
+    );
+  }
+
+  PopupMenuItem<SearchSortOrder> _sortItem(
+    SearchSortOrder order,
+    String label,
+    IconData icon,
+  ) {
+    return PopupMenuItem(
+      value: order,
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: NijiColors.textSecondary),
+          const SizedBox(width: 8),
+          Text(label, style: const TextStyle(fontSize: 13)),
+        ],
+      ),
+    );
+  }
+
+  String _sortLabel(SearchSortOrder order) => switch (order) {
+        SearchSortOrder.relevance => 'Relevance',
+        SearchSortOrder.titleAsc => 'A→Z',
+        SearchSortOrder.titleDesc => 'Z→A',
+        SearchSortOrder.source => 'Source',
+      };
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -187,7 +352,6 @@ class _AnimeGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Responsive grid: more columns on wider screens
         final crossAxisCount = constraints.maxWidth > 900
             ? 5
             : constraints.maxWidth > 600
@@ -229,10 +393,7 @@ class _AnimeCard extends StatelessWidget {
 
     return InkWell(
       onTap: () {
-        // Navigate to anime detail, passing extension ID and anime ID.
-        context.push(
-          '/anime/${result.extensionId}/${result.result.id}',
-        );
+        context.push('/anime/${result.extensionId}/${result.result.id}');
       },
       borderRadius: BorderRadius.circular(12),
       child: Column(
@@ -249,10 +410,10 @@ class _AnimeCard extends StatelessWidget {
                     ? CachedNetworkImage(
                         imageUrl: result.result.coverUrl!,
                         fit: BoxFit.cover,
-                        placeholder: (_, url) => _CoverPlaceholder(
+                        placeholder: (context, url) => _CoverPlaceholder(
                           title: result.result.title,
                         ),
-                        errorWidget: (_, url, error) => _CoverPlaceholder(
+                        errorWidget: (context, url, error) => _CoverPlaceholder(
                           title: result.result.title,
                         ),
                       )
@@ -363,7 +524,12 @@ class _NoExtensionsView extends StatelessWidget {
 class _NoResultsView extends StatelessWidget {
   final ThemeData theme;
   final String query;
-  const _NoResultsView({required this.theme, required this.query});
+  final bool hasSourceFilter;
+  const _NoResultsView({
+    required this.theme,
+    required this.query,
+    required this.hasSourceFilter,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -380,10 +546,13 @@ class _NoResultsView extends StatelessWidget {
           Text('No results for "$query"', style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            'Try a different search term or add more extensions.',
+            hasSourceFilter
+                ? 'No results from this source.\nTry switching to "All" sources.'
+                : 'Try a different search term or add more extensions.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: NijiColors.textSecondary,
             ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
