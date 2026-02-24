@@ -132,6 +132,7 @@ void main() {
         'url': '/watch/naruto/1',
       };
       final episode = ExtensionEpisode.fromJson(json);
+      expect(episode.id, equals('/watch/naruto/1')); // defaults to url
       expect(episode.number, equals(1));
       expect(episode.title, equals('Homecoming'));
       expect(episode.url, equals('/watch/naruto/1'));

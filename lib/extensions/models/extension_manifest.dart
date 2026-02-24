@@ -155,21 +155,28 @@ class ExtensionSearchResponse {
 
 /// Episode info from an extension's `getDetail()`.
 class ExtensionEpisode {
+  /// Unique episode identifier within the extension.
+  /// Defaults to [url] when extensions don't provide an explicit id —
+  /// [url] is what the extension's `getVideoSources()` method expects.
+  final String id;
   final int number;
   final String? title;
   final String url;
 
   const ExtensionEpisode({
+    required this.id,
     required this.number,
     this.title,
     required this.url,
   });
 
   factory ExtensionEpisode.fromJson(Map<String, dynamic> json) {
+    final url = json['url'] as String? ?? '';
     return ExtensionEpisode(
+      id: json['id'] as String? ?? url,
       number: json['number'] as int? ?? 0,
       title: json['title'] as String?,
-      url: json['url'] as String? ?? '',
+      url: url,
     );
   }
 }
@@ -200,11 +207,15 @@ class ExtensionVideoSource {
   final String url;
   final String quality; // e.g., "1080p", "720p", "auto"
   final String type; // "hls", "mp4", "dash"
+  final String? server; // e.g., "vidstreaming", "gogocdn"
+  final Map<String, String>? headers; // custom HTTP headers
 
   const ExtensionVideoSource({
     required this.url,
     this.quality = 'auto',
     this.type = 'mp4',
+    this.server,
+    this.headers,
   });
 
   factory ExtensionVideoSource.fromJson(Map<String, dynamic> json) {
@@ -212,6 +223,9 @@ class ExtensionVideoSource {
       url: json['url'] as String? ?? '',
       quality: json['quality'] as String? ?? 'auto',
       type: json['type'] as String? ?? 'mp4',
+      server: json['server'] as String?,
+      headers: (json['headers'] as Map<String, dynamic>?)
+          ?.map((k, v) => MapEntry(k, v.toString())),
     );
   }
 }
@@ -220,11 +234,13 @@ class ExtensionVideoSource {
 class ExtensionSubtitle {
   final String url;
   final String lang;
+  final String label; // display name, e.g. "English"
   final String type; // "srt", "vtt", "ass"
 
   const ExtensionSubtitle({
     required this.url,
     this.lang = 'en',
+    this.label = 'Unknown',
     this.type = 'srt',
   });
 
@@ -232,6 +248,7 @@ class ExtensionSubtitle {
     return ExtensionSubtitle(
       url: json['url'] as String? ?? '',
       lang: json['lang'] as String? ?? 'en',
+      label: json['label'] as String? ?? json['lang'] as String? ?? 'Unknown',
       type: json['type'] as String? ?? 'srt',
     );
   }

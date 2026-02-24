@@ -1,18 +1,22 @@
 /// NijiStream — Application entry point.
 ///
 /// Wraps the app in a [ProviderScope] (Riverpod) so that any widget in
-/// the tree can access providers. Initializes the extension system
-/// on startup.
+/// the tree can access providers. Initializes both MediaKit and the
+/// extension system on startup.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'app.dart';
 import 'data/providers/extension_providers.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize media_kit (libmpv) for video playback.
+  MediaKit.ensureInitialized();
 
   runApp(
     ProviderScope(

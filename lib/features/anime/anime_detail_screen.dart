@@ -12,6 +12,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../../core/theme/colors.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
+import '../player/video_player_screen.dart';
 
 class AnimeDetailScreen extends ConsumerStatefulWidget {
   final String extensionId;
@@ -191,13 +192,17 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
                     episode: episode,
                     theme: theme,
                     onTap: () {
-                      // TODO: Navigate to video player (Sprint 4)
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Player coming soon — Episode ${episode.number}',
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => VideoPlayerScreen(
+                            extensionId: widget.extensionId,
+                            episodeId: episode.id,
+                            animeTitle: detail.title,
+                            episodeNumber: episode.number,
+                            episodeTitle: episode.title,
+                            episodes: detail.episodes,
+                            currentEpisodeIndex: index,
                           ),
-                          behavior: SnackBarBehavior.floating,
                         ),
                       );
                     },
