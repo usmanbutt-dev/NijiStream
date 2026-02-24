@@ -4,16 +4,23 @@
 /// for a **single extension**. Each extension gets its own [JsRuntime]
 /// instance with bridge functions registered.
 ///
-/// **How flutter_js works (quick primer):**
-/// `flutter_js` provides `getJavascriptRuntime()` which gives you a
-/// QuickJS context. You can:
-///   - `evaluate(code)` — run JS code and get the result
-///   - `onMessage(channel, callback)` — register Dart functions callable
-///     from JS via `sendMessage(channel, args)`
+/// ## How flutter_js / QuickJS works (important nuances)
 ///
-/// We use `evaluate()` to load the extension's .js file, then call
-/// its methods (search, getDetail, etc.) by evaluating more JS code
-/// that invokes those methods and returns JSON results.
+/// 1. `evaluate(code)` is synchronous. Evaluating an `async` IIFE returns
+///    a `[object Promise]` JsEvalResult immediately — the Promise is not
+///    yet resolved.
+///
+/// 2. `onMessage(channel, handler)` registers a Dart callback. The JS side
+///    calls `sendMessage(channel, jsonString)`. IMPORTANT: flutter_js
+///    **automatically `jsonDecode`s** the second argument before calling
+///    the Dart handler, so the handler receives a `dynamic` (Map/List/String)
+///    — NOT a raw JSON string.
+///
+/// 3. `handlePromise(result)` is the official flutter_js API for awaiting a
+///    Promise returned by `evaluate`. It polls `executePendingJob()` via
+///    `Timer.periodic` until `FLUTTER_NATIVEJS_MakeQuerablePromise` reports
+///    the Promise is no longer pending, then reads the value.
+///    We use this for every async extension call.
 library;
 
 import 'dart:convert';
@@ -41,39 +48,27 @@ class JsRuntime {
       : _bridge = bridge ?? BridgeFunctions();
 
   /// Initialize the QuickJS runtime and register all bridge functions.
-  ///
-  /// Call this once before [loadExtension]. We separate init from
-  /// construction so it can be async.
   Future<void> init() async {
     _runtime = getJavascriptRuntime();
     _registerBridgeFunctions();
   }
 
   /// Load and execute an extension's JavaScript source code.
-  ///
-  /// After loading, the extension's `manifest` and `AnimeSource` class
-  /// are available in the JS context.
   Future<void> loadExtension(String jsCode) async {
-    // Inject the JS helper layer that bridges Dart calls to/from JS.
-    // This provides the `http`, `parseHtml`, `crypto`, and `log` globals
-    // that extensions expect.
     _runtime.evaluate(_bridgeJsCode);
 
-    // Load the extension source code.
     final result = _runtime.evaluate(jsCode);
     if (result.isError) {
       throw Exception('Failed to load extension JS: ${result.stringResult}');
     }
 
-    // Extract the manifest.
     final manifestResult = _runtime.evaluate('JSON.stringify(manifest)');
     if (!manifestResult.isError) {
       try {
-        final json = jsonDecode(manifestResult.stringResult) as Map<String, dynamic>;
+        final json =
+            jsonDecode(manifestResult.stringResult) as Map<String, dynamic>;
         manifest = ExtensionManifest.fromJson(json);
-      } catch (_) {
-        // Manifest parsing failed — extension may still work.
-      }
+      } catch (_) {}
     }
 
     _loaded = true;
@@ -83,11 +78,8 @@ class JsRuntime {
   Future<ExtensionSearchResponse> search(String query, int page) async {
     _ensureLoaded();
     final escaped = _escapeJs(query);
-    final json = await _callAsync('''
-      const source = new AnimeSource();
-      const result = await source.search("$escaped", $page);
-      return JSON.stringify(result);
-    ''');
+    final json = await _callAsync(
+        'new AnimeSource().search("$escaped", $page)');
     return _parseSearchResponse(json);
   }
 
@@ -95,11 +87,8 @@ class JsRuntime {
   Future<ExtensionAnimeDetail> getDetail(String animeId) async {
     _ensureLoaded();
     final escaped = _escapeJs(animeId);
-    final json = await _callAsync('''
-      const source = new AnimeSource();
-      const result = await source.getDetail("$escaped");
-      return JSON.stringify(result);
-    ''');
+    final json = await _callAsync(
+        'new AnimeSource().getDetail("$escaped")');
     return _parseDetailResponse(json);
   }
 
@@ -107,11 +96,8 @@ class JsRuntime {
   Future<ExtensionVideoResponse> getVideoSources(String episodeUrl) async {
     _ensureLoaded();
     final escaped = _escapeJs(episodeUrl);
-    final json = await _callAsync('''
-      const source = new AnimeSource();
-      const result = await source.getVideoSources("$escaped");
-      return JSON.stringify(result);
-    ''');
+    final json = await _callAsync(
+        'new AnimeSource().getVideoSources("$escaped")');
     return _parseVideoResponse(json);
   }
 
@@ -119,16 +105,9 @@ class JsRuntime {
   Future<ExtensionSearchResponse> getLatest(int page) async {
     _ensureLoaded();
     final hasMethod = _runtime.evaluate(
-      'typeof AnimeSource.prototype.getLatest === "function"',
-    );
-    if (hasMethod.stringResult != 'true') {
-      return const ExtensionSearchResponse();
-    }
-    final json = await _callAsync('''
-      const source = new AnimeSource();
-      const result = await source.getLatest($page);
-      return JSON.stringify(result);
-    ''');
+        'typeof AnimeSource.prototype.getLatest === "function"');
+    if (hasMethod.stringResult != 'true') return const ExtensionSearchResponse();
+    final json = await _callAsync('new AnimeSource().getLatest($page)');
     return _parseSearchResponse(json);
   }
 
@@ -136,16 +115,9 @@ class JsRuntime {
   Future<ExtensionSearchResponse> getPopular(int page) async {
     _ensureLoaded();
     final hasMethod = _runtime.evaluate(
-      'typeof AnimeSource.prototype.getPopular === "function"',
-    );
-    if (hasMethod.stringResult != 'true') {
-      return const ExtensionSearchResponse();
-    }
-    final json = await _callAsync('''
-      const source = new AnimeSource();
-      const result = await source.getPopular($page);
-      return JSON.stringify(result);
-    ''');
+        'typeof AnimeSource.prototype.getPopular === "function"');
+    if (hasMethod.stringResult != 'true') return const ExtensionSearchResponse();
+    final json = await _callAsync('new AnimeSource().getPopular($page)');
     return _parseSearchResponse(json);
   }
 
@@ -158,87 +130,73 @@ class JsRuntime {
   // PRIVATE: Bridge registration
   // ═══════════════════════════════════════════════════════════════════
 
-  /// Register all Dart bridge functions into the JS context.
-  ///
-  /// flutter_js's `onMessage` lets us define named channels. The JS side
-  /// calls `sendMessage(channel, JSON.stringify(args))` and the Dart
-  /// callback receives the args string and returns a result.
   void _registerBridgeFunctions() {
+    // NOTE: flutter_js automatically jsonDecodes the message string before
+    // calling the handler. Handlers receive a decoded dynamic (Map/List/String).
+
     // ── http.get ──
-    _runtime.onMessage('http_get', (args) {
-      final envelope = jsonDecode(args) as Map<String, dynamic>;
-      final id = envelope['id'] as String;
-      final data = envelope['data'] as Map<String, dynamic>;
+    _runtime.onMessage('http_get', (dynamic args) {
+      // args is already a Map (decoded from JSON by flutter_js)
+      final map = args as Map<dynamic, dynamic>;
+      final id = map['id'] as String;
+      final data = map['data'] as Map<dynamic, dynamic>;
       final url = data['url'] as String;
-      final headers = (data['headers'] as Map<String, dynamic>?)
-          ?.map((k, v) => MapEntry(k, v.toString()));
+      final rawHeaders = data['headers'] as Map<dynamic, dynamic>?;
+      final headers = rawHeaders?.map((k, v) => MapEntry(k.toString(), v.toString()));
       _bridge.httpGet(url, headers).then((result) {
-        _runtime.evaluate(
-          '_resolvePending(${jsonEncode(id)}, ${jsonEncode(result)})',
-        );
+        _runtime.evaluate('_resolvePending(${jsonEncode(id)}, ${jsonEncode(result)})');
         _runtime.executePendingJob();
       });
       return '';
     });
 
     // ── http.post ──
-    _runtime.onMessage('http_post', (args) {
-      final envelope = jsonDecode(args) as Map<String, dynamic>;
-      final id = envelope['id'] as String;
-      final data = envelope['data'] as Map<String, dynamic>;
+    _runtime.onMessage('http_post', (dynamic args) {
+      final map = args as Map<dynamic, dynamic>;
+      final id = map['id'] as String;
+      final data = map['data'] as Map<dynamic, dynamic>;
       final url = data['url'] as String;
       final body = data['body'] as String? ?? '';
-      final headers = (data['headers'] as Map<String, dynamic>?)
-          ?.map((k, v) => MapEntry(k, v.toString()));
+      final rawHeaders = data['headers'] as Map<dynamic, dynamic>?;
+      final headers = rawHeaders?.map((k, v) => MapEntry(k.toString(), v.toString()));
       _bridge.httpPost(url, body, headers).then((result) {
-        _runtime.evaluate(
-          '_resolvePending(${jsonEncode(id)}, ${jsonEncode(result)})',
-        );
+        _runtime.evaluate('_resolvePending(${jsonEncode(id)}, ${jsonEncode(result)})');
         _runtime.executePendingJob();
       });
       return '';
     });
 
     // ── parseHtml ──
-    _runtime.onMessage('parse_html', (args) {
-      return _bridge.parseHtml(args);
+    _runtime.onMessage('parse_html', (dynamic args) {
+      return _bridge.parseHtml(args as String);
     });
 
     // ── querySelectorAll ──
-    _runtime.onMessage('query_selector_all', (args) {
-      final parsed = jsonDecode(args) as Map<String, dynamic>;
+    _runtime.onMessage('query_selector_all', (dynamic args) {
+      final map = args as Map<dynamic, dynamic>;
       return _bridge.querySelectorAll(
-        parsed['html'] as String,
-        parsed['selector'] as String,
+        map['html'] as String,
+        map['selector'] as String,
       );
     });
 
     // ── querySelector ──
-    _runtime.onMessage('query_selector', (args) {
-      final parsed = jsonDecode(args) as Map<String, dynamic>;
+    _runtime.onMessage('query_selector', (dynamic args) {
+      final map = args as Map<dynamic, dynamic>;
       return _bridge.querySelector(
-        parsed['html'] as String,
-        parsed['selector'] as String,
-      ) ?? 'null';
+            map['html'] as String,
+            map['selector'] as String,
+          ) ??
+          'null';
     });
 
-    // ── crypto.md5 ──
-    _runtime.onMessage('crypto_md5', (args) {
-      return _bridge.cryptoMd5(args);
-    });
-
-    // ── crypto.base64Encode ──
-    _runtime.onMessage('crypto_base64_encode', (args) {
-      return _bridge.cryptoBase64Encode(args);
-    });
-
-    // ── crypto.base64Decode ──
-    _runtime.onMessage('crypto_base64_decode', (args) {
-      return _bridge.cryptoBase64Decode(args);
-    });
+    // ── crypto ──
+    _runtime.onMessage('crypto_md5', (dynamic args) => _bridge.cryptoMd5(args as String));
+    _runtime.onMessage('crypto_base64_encode', (dynamic args) => _bridge.cryptoBase64Encode(args as String));
+    _runtime.onMessage('crypto_base64_decode', (dynamic args) => _bridge.cryptoBase64Decode(args as String));
 
     // ── log ──
-    _runtime.onMessage('niji_log', (args) {
+    _runtime.onMessage('niji_log', (dynamic args) {
       // ignore: avoid_print
       print('[Extension] $args');
       return '';
@@ -246,90 +204,75 @@ class JsRuntime {
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // PRIVATE: Helpers
+  // PRIVATE: Async call helper
   // ═══════════════════════════════════════════════════════════════════
 
   void _ensureLoaded() {
-    if (!_loaded) {
-      throw StateError('Extension not loaded. Call loadExtension() first.');
-    }
+    if (!_loaded) throw StateError('Extension not loaded. Call loadExtension() first.');
   }
 
-  /// Escape a string for safe embedding in JS string literals.
-  String _escapeJs(String input) {
-    return input
-        .replaceAll('\\', '\\\\')
-        .replaceAll('"', '\\"')
-        .replaceAll("'", "\\'")
-        .replaceAll('\n', '\\n')
-        .replaceAll('\r', '\\r');
-  }
+  String _escapeJs(String input) => input
+      .replaceAll('\\', '\\\\')
+      .replaceAll('"', '\\"')
+      .replaceAll("'", "\\'")
+      .replaceAll('\n', '\\n')
+      .replaceAll('\r', '\\r');
 
-  /// Run an async JS body and return the resolved string value.
+  /// Evaluate a JS expression that returns a Promise, await it using
+  /// flutter_js's built-in `handlePromise`, then JSON-stringify the result.
   ///
-  /// flutter_js/QuickJS evaluates code synchronously. When you evaluate an
-  /// `async` IIFE the runtime immediately returns a Promise object — it does
-  /// NOT auto-await it. We work around this by:
-  ///  1. Wrapping the caller's body in an async IIFE that stores its result
-  ///     (or error) in two JS globals: `__nijiResult` / `__nijiError`.
-  ///  2. Calling `executePendingJob()` in a loop (yielding to the Dart event
-  ///     loop each iteration) until one of those globals is set.
-  ///  3. Reading the global back with a second `evaluate()` call.
-  ///
-  /// This correctly handles both pure-sync extensions (like the example
-  /// source that returns hard-coded data) and extensions that `await`
-  /// async bridge calls.
-  Future<String> _callAsync(String asyncBody) async {
-    // Clear the result slots and kick off the async work.
-    _runtime.evaluate('var __nijiResult = undefined; var __nijiError = undefined;');
-    _runtime.evaluate('''
-      (async () => {
-        try {
-          var __ret = (async () => { $asyncBody })();
-          __ret.then(function(v) { __nijiResult = v; })
-               .catch(function(e) { __nijiError = String(e); });
-        } catch(e) {
-          __nijiError = String(e);
-        }
-      })();
-    ''');
+  /// `jsExpr` must be a JS expression that evaluates to a Promise<object>.
+  /// Example: `'new AnimeSource().search("naruto", 1)'`
+  Future<String> _callAsync(String jsExpr) async {
+    // Wrap in JSON.stringify so we get back a plain string.
+    final promiseResult = _runtime.evaluate(
+      '($jsExpr).then(function(r){ return JSON.stringify(r); })',
+    );
 
-    // Spin the job loop until the result lands.
-    // Yield to the Dart event loop between each tick so that Dart-side
-    // async work (e.g. HTTP bridge calls) can complete.
-    for (var i = 0; i < 2000; i++) {
-      _runtime.executePendingJob();
-
-      final errCheck = _runtime.evaluate('__nijiError !== undefined ? String(__nijiError) : ""');
-      if (errCheck.stringResult.isNotEmpty) {
-        throw Exception('JS async error: ${errCheck.stringResult}');
-      }
-
-      final check = _runtime.evaluate('__nijiResult !== undefined ? String(__nijiResult) : ""');
-      if (check.stringResult.isNotEmpty) {
-        return check.stringResult;
-      }
-
-      // Yield to Dart event loop.
-      await Future<void>.delayed(Duration.zero);
+    if (promiseResult.isError) {
+      throw Exception('JS error: ${promiseResult.stringResult}');
     }
 
-    throw Exception('JS async call timed out after 2000 iterations');
+    // handlePromise polls executePendingJob until the Promise settles.
+    final resolved = await _runtime.handlePromise(
+      promiseResult,
+      timeout: const Duration(seconds: 30),
+    );
+
+    if (resolved.isError) {
+      throw Exception('JS async error: ${resolved.stringResult}');
+    }
+
+    // The resolved value is the JSON string from JSON.stringify.
+    // handlePromise wraps it in another JSON.stringify internally, so
+    // the stringResult may be a JSON-encoded string — unwrap if needed.
+    var raw = resolved.stringResult;
+    // If the result is a quoted JSON string (e.g. '"{\\"key\\":1}"'), unwrap it.
+    if (raw.startsWith('"') && raw.endsWith('"')) {
+      try {
+        raw = jsonDecode(raw) as String;
+      } catch (_) {}
+    }
+    return raw;
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // PRIVATE: Response parsers
+  // ═══════════════════════════════════════════════════════════════════
 
   ExtensionSearchResponse _parseSearchResponse(String json) {
     try {
       final data = jsonDecode(json) as Map<String, dynamic>;
       final results = (data['results'] as List<dynamic>?)
-              ?.map((e) => ExtensionSearchResult.fromJson(
-                  e as Map<String, dynamic>))
+              ?.map((e) =>
+                  ExtensionSearchResult.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [];
       return ExtensionSearchResponse(
         hasNextPage: data['hasNextPage'] as bool? ?? false,
         results: results,
       );
-    } catch (e) {
+    } catch (_) {
       return const ExtensionSearchResponse();
     }
   }
@@ -338,8 +281,8 @@ class JsRuntime {
     try {
       final data = jsonDecode(json) as Map<String, dynamic>;
       final episodes = (data['episodes'] as List<dynamic>?)
-              ?.map(
-                  (e) => ExtensionEpisode.fromJson(e as Map<String, dynamic>))
+              ?.map((e) =>
+                  ExtensionEpisode.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [];
       final genres = (data['genres'] as List<dynamic>?)
@@ -374,7 +317,7 @@ class JsRuntime {
               .toList() ??
           [];
       return ExtensionVideoResponse(sources: sources, subtitles: subtitles);
-    } catch (e) {
+    } catch (_) {
       return const ExtensionVideoResponse();
     }
   }
@@ -382,18 +325,21 @@ class JsRuntime {
 
 // ═══════════════════════════════════════════════════════════════════════
 // JS bridge code injected into every extension runtime.
-//
-// This provides the global `http`, `parseHtml`, `crypto`, and `log`
-// objects that extensions expect to use.
 // ═══════════════════════════════════════════════════════════════════════
 
 const _bridgeJsCode = r'''
 // ── HTTP bridge ──
-// http.get / http.post return Promises.
-// The Dart side processes the request asynchronously and resolves the
-// pending promise via _resolvePending() injected back into the runtime.
+// http.get / http.post return Promises resolved by the Dart side calling
+// _resolvePending(id, result) back into the runtime.
 var __httpPending = {};
 var __httpNextId = 0;
+
+function _resolvePending(id, result) {
+  if (__httpPending[id]) {
+    __httpPending[id](result);
+    delete __httpPending[id];
+  }
+}
 
 function __makeHttpPromise(channel, args) {
   var id = String(__httpNextId++);
@@ -402,13 +348,6 @@ function __makeHttpPromise(channel, args) {
   });
   sendMessage(channel, JSON.stringify({ id: id, data: args }));
   return p;
-}
-
-function _resolvePending(id, result) {
-  if (__httpPending[id]) {
-    __httpPending[id](result);
-    delete __httpPending[id];
-  }
 }
 
 var http = {
@@ -421,85 +360,57 @@ var http = {
 };
 
 // ── HTML parser bridge ──
-// Returns a helper object with querySelector/querySelectorAll methods.
 function parseHtml(htmlString) {
   return {
     _html: htmlString,
     querySelector: function(selector) {
       var result = sendMessage("query_selector", JSON.stringify({
-        html: this._html,
-        selector: selector
+        html: this._html, selector: selector
       }));
       if (result === "null" || !result) return null;
-      var el = JSON.parse(result);
-      return _wrapElement(el, this._html);
+      return _wrapElement(JSON.parse(result), this._html);
     },
     querySelectorAll: function(selector) {
       var result = sendMessage("query_selector_all", JSON.stringify({
-        html: this._html,
-        selector: selector
+        html: this._html, selector: selector
       }));
-      var elements = JSON.parse(result);
       var self = this;
-      return elements.map(function(el) { return _wrapElement(el, self._html); });
+      return JSON.parse(result).map(function(el) { return _wrapElement(el, self._html); });
     },
-    text: (function() {
-      var parsed = sendMessage("parse_html", htmlString);
-      return JSON.parse(parsed).text || "";
-    })()
+    get text() {
+      return JSON.parse(sendMessage("parse_html", this._html)).text || "";
+    }
   };
 }
 
-// Wrap a parsed element JSON in a helper with attribute access.
-function _wrapElement(el, originalHtml) {
+function _wrapElement(el, contextHtml) {
   return {
     tag: el.tag,
     text: el.text || "",
     html: el.html || "",
     attrs: el.attrs || {},
-    children: (el.children || []).map(function(c) {
-      return _wrapElement(c, originalHtml);
-    }),
-    getAttribute: function(name) {
-      return (el.attrs || {})[name] || null;
-    },
+    getAttribute: function(name) { return (el.attrs || {})[name] || null; },
     querySelector: function(selector) {
-      // Re-query using this element's inner HTML as the base document.
-      var result = sendMessage("query_selector", JSON.stringify({
-        html: el.html || "",
-        selector: selector
-      }));
+      var result = sendMessage("query_selector", JSON.stringify({ html: el.html || "", selector: selector }));
       if (result === "null" || !result) return null;
       return _wrapElement(JSON.parse(result), el.html || "");
     },
     querySelectorAll: function(selector) {
-      var result = sendMessage("query_selector_all", JSON.stringify({
-        html: el.html || "",
-        selector: selector
-      }));
-      var elements = JSON.parse(result);
-      return elements.map(function(c) {
-        return _wrapElement(c, el.html || "");
-      });
+      var result = sendMessage("query_selector_all", JSON.stringify({ html: el.html || "", selector: selector }));
+      return JSON.parse(result).map(function(c) { return _wrapElement(c, el.html || ""); });
     }
   };
 }
 
 // ── Crypto bridge ──
 var crypto = {
-  md5: function(input) {
-    return sendMessage("crypto_md5", input);
-  },
-  base64Encode: function(input) {
-    return sendMessage("crypto_base64_encode", input);
-  },
-  base64Decode: function(input) {
-    return sendMessage("crypto_base64_decode", input);
-  }
+  md5: function(input) { return sendMessage("crypto_md5", JSON.stringify(input)); },
+  base64Encode: function(input) { return sendMessage("crypto_base64_encode", JSON.stringify(input)); },
+  base64Decode: function(input) { return sendMessage("crypto_base64_decode", JSON.stringify(input)); }
 };
 
 // ── Logging ──
 function log(message) {
-  sendMessage("niji_log", String(message));
+  sendMessage("niji_log", JSON.stringify(String(message)));
 }
 ''';
