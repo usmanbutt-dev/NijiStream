@@ -1,15 +1,18 @@
 /// NijiStream — Anime Detail screen.
 ///
 /// Displays full anime information from an extension's `getDetail()`:
-/// cover, synopsis, genres, and episode list. This is the entry point
-/// for watching episodes once the video player is integrated.
+/// cover, synopsis, genres, and episode list. Supports adding the anime
+/// to the user's library with a status selector.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 
+import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
+import '../../data/database/app_database.dart';
+import '../../data/repositories/library_repository.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
 import '../player/video_player_screen.dart';
@@ -64,6 +67,59 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
     }
   }
 
+  void _showLibrarySheet(UserLibraryTableData? currentEntry) {
+    final detail = _detail;
+    if (detail == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: NijiColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => _LibrarySheet(
+        currentStatus: currentEntry?.status,
+        onStatusSelected: (status) async {
+          Navigator.pop(ctx);
+          final libraryRepo = ref.read(libraryRepositoryProvider);
+          await libraryRepo.addToLibrary(
+            extensionId: widget.extensionId,
+            animeId: widget.animeId,
+            detail: detail,
+            status: status,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Added to ${LibraryStatus.label(status)}'),
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        },
+        onRemove: currentEntry != null
+            ? () async {
+                Navigator.pop(ctx);
+                await ref.read(libraryRepositoryProvider).removeFromLibrary(
+                      extensionId: widget.extensionId,
+                      animeId: widget.animeId,
+                    );
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Removed from library'),
+                      behavior: SnackBarBehavior.floating,
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                }
+              }
+            : null,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -112,11 +168,23 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
 
     final detail = _detail!;
 
+    // Reactively watch the library entry for this anime.
+    final libraryEntry = ref.watch(
+      _libraryEntryProvider(
+        (extensionId: widget.extensionId, animeId: widget.animeId),
+      ),
+    );
+
     return Scaffold(
       body: CustomScrollView(
         slivers: [
-          // ── Hero banner + cover ──
-          _DetailAppBar(detail: detail, theme: theme),
+          // ── Hero banner + cover + library button ──
+          _DetailAppBar(
+            detail: detail,
+            theme: theme,
+            libraryEntry: libraryEntry.value,
+            onLibraryTap: () => _showLibrarySheet(libraryEntry.value),
+          ),
 
           // ── Synopsis ──
           if (detail.synopsis != null && detail.synopsis!.isNotEmpty)
@@ -220,26 +288,111 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
   }
 }
 
+// ── Library entry provider (scoped per anime) ─────────────────────────────
+
+final _libraryEntryProvider = StreamProvider.family<UserLibraryTableData?,
+    ({String extensionId, String animeId})>((ref, args) {
+  return ref.read(libraryRepositoryProvider).watchEntry(
+        extensionId: args.extensionId,
+        animeId: args.animeId,
+      );
+});
+
 // ═══════════════════════════════════════════════════════════════════
-// Detail App Bar (cover + title hero)
+// Library Bottom Sheet
+// ═══════════════════════════════════════════════════════════════════
+
+class _LibrarySheet extends StatelessWidget {
+  final String? currentStatus;
+  final ValueChanged<String> onStatusSelected;
+  final VoidCallback? onRemove;
+
+  const _LibrarySheet({
+    required this.currentStatus,
+    required this.onStatusSelected,
+    this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              child: Text(
+                'Add to Library',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            ...LibraryStatus.all.map((status) => ListTile(
+                  leading: Icon(
+                    currentStatus == status
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_off_rounded,
+                    color: currentStatus == status
+                        ? theme.colorScheme.primary
+                        : NijiColors.textSecondary,
+                  ),
+                  title: Text(LibraryStatus.label(status)),
+                  onTap: () => onStatusSelected(status),
+                )),
+            if (onRemove != null) ...[
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: NijiColors.error,
+                ),
+                title: const Text(
+                  'Remove from Library',
+                  style: TextStyle(color: NijiColors.error),
+                ),
+                onTap: onRemove,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Detail App Bar (cover + title + library button)
 // ═══════════════════════════════════════════════════════════════════
 
 class _DetailAppBar extends StatelessWidget {
   final ExtensionAnimeDetail detail;
   final ThemeData theme;
+  final UserLibraryTableData? libraryEntry;
+  final VoidCallback onLibraryTap;
 
-  const _DetailAppBar({required this.detail, required this.theme});
+  const _DetailAppBar({
+    required this.detail,
+    required this.theme,
+    required this.libraryEntry,
+    required this.onLibraryTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     return SliverAppBar(
-      expandedHeight: 280,
+      expandedHeight: 300,
       pinned: true,
       flexibleSpace: FlexibleSpaceBar(
         background: Stack(
           fit: StackFit.expand,
           children: [
-            // Background cover (blurred)
+            // Background cover (darkened)
             if (detail.coverUrl != null)
               CachedNetworkImage(
                 imageUrl: detail.coverUrl!,
@@ -264,7 +417,7 @@ class _DetailAppBar extends StatelessWidget {
               ),
             ),
 
-            // Content row: cover + title
+            // Content: cover + title + library button
             Positioned(
               left: 16,
               right: 16,
@@ -291,7 +444,7 @@ class _DetailAppBar extends StatelessWidget {
                   ),
                   const SizedBox(width: 16),
 
-                  // Title + status
+                  // Title + status + library button
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -309,6 +462,11 @@ class _DetailAppBar extends StatelessWidget {
                           const SizedBox(height: 4),
                           _StatusChip(status: detail.status!),
                         ],
+                        const SizedBox(height: 12),
+                        _LibraryButton(
+                          entry: libraryEntry,
+                          onTap: onLibraryTap,
+                        ),
                       ],
                     ),
                   ),
@@ -318,6 +476,46 @@ class _DetailAppBar extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _LibraryButton extends StatelessWidget {
+  final UserLibraryTableData? entry;
+  final VoidCallback onTap;
+
+  const _LibraryButton({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final inLibrary = entry != null;
+
+    if (inLibrary) {
+      return OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: theme.colorScheme.primary,
+          side: BorderSide(color: theme.colorScheme.primary),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          visualDensity: VisualDensity.compact,
+        ),
+        icon: const Icon(Icons.bookmark_rounded, size: 16),
+        label: Text(
+          LibraryStatus.label(entry!.status),
+          style: const TextStyle(fontSize: 12),
+        ),
+        onPressed: onTap,
+      );
+    }
+
+    return FilledButton.icon(
+      style: FilledButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        visualDensity: VisualDensity.compact,
+      ),
+      icon: const Icon(Icons.bookmark_add_outlined, size: 16),
+      label: const Text('Add to Library', style: TextStyle(fontSize: 12)),
+      onPressed: onTap,
     );
   }
 }

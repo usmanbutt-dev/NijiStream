@@ -21,6 +21,13 @@ import 'tables.dart';
 
 part 'app_database.g.dart';
 
+/// A joined row returned by [AppDatabase.watchLibrary].
+class LibraryItem {
+  final AnimeTableData anime;
+  final UserLibraryTableData library;
+  const LibraryItem({required this.anime, required this.library});
+}
+
 @DriftDatabase(
   tables: [
     AnimeTable,
@@ -61,6 +68,83 @@ class AppDatabase extends _$AppDatabase {
         // }
       },
     );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Anime helpers
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Upsert (insert or replace) an anime record.
+  Future<void> upsertAnime(AnimeTableCompanion row) =>
+      into(animeTable).insertOnConflictUpdate(row);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Library helpers
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Get the library entry for a specific anime, if it exists.
+  Future<UserLibraryTableData?> getLibraryEntry(String animeId) =>
+      (select(userLibraryTable)..where((t) => t.animeId.equals(animeId)))
+          .getSingleOrNull();
+
+  /// Watch the library entry for a specific anime (reactive stream).
+  Stream<UserLibraryTableData?> watchLibraryEntry(String animeId) =>
+      (select(userLibraryTable)..where((t) => t.animeId.equals(animeId)))
+          .watchSingleOrNull();
+
+  /// Insert or update a library entry for the given anime.
+  Future<void> upsertLibraryEntry({
+    required String animeId,
+    required String status,
+    int progress = 0,
+    double score = 0.0,
+  }) async {
+    final existing = await getLibraryEntry(animeId);
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    if (existing != null) {
+      await (update(userLibraryTable)
+            ..where((t) => t.animeId.equals(animeId)))
+          .write(UserLibraryTableCompanion(
+        status: Value(status),
+        updatedAt: Value(now),
+      ));
+    } else {
+      await into(userLibraryTable).insert(UserLibraryTableCompanion(
+        animeId: Value(animeId),
+        status: Value(status),
+        progress: Value(progress),
+        score: Value(score),
+        updatedAt: Value(now),
+      ));
+    }
+  }
+
+  /// Remove an anime from the library.
+  Future<int> removeFromLibrary(String animeId) =>
+      (delete(userLibraryTable)..where((t) => t.animeId.equals(animeId))).go();
+
+  /// Watch all library items joined with their anime data.
+  /// Pass [status] to filter by a specific status, or null for all.
+  Stream<List<LibraryItem>> watchLibrary({String? status}) {
+    final query = select(userLibraryTable).join([
+      innerJoin(animeTable, animeTable.id.equalsExp(userLibraryTable.animeId)),
+    ]);
+
+    if (status != null) {
+      query.where(userLibraryTable.status.equals(status));
+    }
+
+    query.orderBy([OrderingTerm.desc(userLibraryTable.updatedAt)]);
+
+    return query.watch().map(
+          (rows) => rows
+              .map((row) => LibraryItem(
+                    anime: row.readTable(animeTable),
+                    library: row.readTable(userLibraryTable),
+                  ))
+              .toList(),
+        );
   }
 }
 
