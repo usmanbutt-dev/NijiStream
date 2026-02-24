@@ -6,7 +6,8 @@
 /// - Optional subtitle track selection
 /// - Adaptive controls (Material on mobile, Desktop on desktop)
 /// - Next/previous episode navigation
-/// - Watch progress tracking (saves position on exit)
+/// - Watch progress tracking (saves position every 5s and on exit)
+/// - Resume playback from last saved position
 library;
 
 import 'dart:async';
@@ -18,6 +19,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../core/theme/colors.dart';
+import '../../data/services/watch_progress_service.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
 
@@ -50,6 +52,7 @@ class VideoPlayerScreen extends ConsumerStatefulWidget {
 class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   late final Player _player;
   late final VideoController _videoController;
+  final _progressService = WatchProgressService();
 
   ExtensionVideoResponse? _videoResponse;
   ExtensionVideoSource? _selectedSource;
@@ -57,6 +60,10 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   String? _error;
   bool _controlsVisible = true;
   Timer? _hideControlsTimer;
+  Timer? _saveTimer;
+
+  // When non-null, seek to this position once duration becomes known.
+  int? _pendingResumeMs;
 
   // Current playback state
   Duration _position = Duration.zero;
@@ -81,7 +88,15 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
         if (mounted) setState(() => _position = pos);
       }),
       _player.stream.duration.listen((dur) {
-        if (mounted) setState(() => _duration = dur);
+        if (mounted) {
+          setState(() => _duration = dur);
+          // Once duration is known, seek to resume position if pending.
+          if (_pendingResumeMs != null && dur.inMilliseconds > 0) {
+            final ms = _pendingResumeMs!;
+            _pendingResumeMs = null;
+            _player.seek(Duration(milliseconds: ms));
+          }
+        }
       }),
       _player.stream.playing.listen((playing) {
         if (mounted) setState(() => _isPlaying = playing);
@@ -94,7 +109,7 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
       }),
     ]);
 
-    // Force landscape-ish immersive mode on mobile.
+    // Force immersive mode on mobile.
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     _loadVideoSources();
@@ -103,12 +118,13 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   @override
   void dispose() {
     _hideControlsTimer?.cancel();
+    _saveTimer?.cancel();
+    // Save final position synchronously-ish before disposing.
+    _saveProgress();
     for (final sub in _subscriptions) {
       sub.cancel();
     }
     _player.dispose();
-
-    // Restore system UI.
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -136,13 +152,26 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
         return;
       }
 
+      // Load saved progress to resume from.
+      final saved = await _progressService.load(
+        widget.extensionId,
+        widget.episodeId,
+      );
+
+      if (!mounted) return;
+
       setState(() {
         _videoResponse = response;
         _isLoading = false;
       });
 
-      // Auto-select best quality source.
-      _selectSource(response.sources.first);
+      // Queue resume seek if there's a non-trivial saved position.
+      final resumeMs =
+          (saved != null && !saved.completed && saved.positionMs > 5000)
+              ? saved.positionMs
+              : null;
+
+      _selectSource(response.sources.first, resumePositionMs: resumeMs);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -153,21 +182,24 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
     }
   }
 
-  void _selectSource(ExtensionVideoSource source) {
+  void _selectSource(
+    ExtensionVideoSource source, {
+    int? resumePositionMs,
+  }) {
     setState(() => _selectedSource = source);
 
-    // Build the media with optional HTTP headers.
+    if (resumePositionMs != null) {
+      _pendingResumeMs = resumePositionMs;
+    }
+
     final media = Media(
       source.url,
       httpHeaders: source.headers ?? {},
     );
-
     _player.open(media);
 
-    // Load subtitle tracks if available.
+    // Load external subtitle tracks if available.
     if (_videoResponse != null && _videoResponse!.subtitles.isNotEmpty) {
-      // media_kit handles subtitle tracks from the source itself.
-      // External subtitles can be loaded separately if extension provides URLs.
       for (final sub in _videoResponse!.subtitles) {
         _player.setSubtitleTrack(
           SubtitleTrack.uri(
@@ -179,10 +211,33 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
       }
     }
 
+    // Start periodic progress saving.
+    _saveTimer?.cancel();
+    _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _saveProgress();
+    });
+
     _resetHideTimer();
   }
 
+  void _saveProgress() {
+    if (_duration.inMilliseconds == 0) return;
+    final completed = _position.inMilliseconds / _duration.inMilliseconds > 0.9;
+    _progressService.save(
+      widget.extensionId,
+      widget.episodeId,
+      WatchProgressEntry(
+        positionMs: _position.inMilliseconds,
+        durationMs: _duration.inMilliseconds,
+        completed: completed,
+      ),
+    );
+  }
+
   void _onPlaybackComplete() {
+    // Mark episode as completed.
+    _progressService.markCompleted(widget.extensionId, widget.episodeId);
+
     // Auto-play next episode if available.
     if (widget.episodes != null && widget.currentEpisodeIndex != null) {
       final nextIndex = widget.currentEpisodeIndex! + 1;
@@ -194,7 +249,9 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   }
 
   void _navigateToEpisode(int index) {
-    if (widget.episodes == null || index < 0 || index >= widget.episodes!.length) {
+    if (widget.episodes == null ||
+        index < 0 ||
+        index >= widget.episodes!.length) {
       return;
     }
 
@@ -339,7 +396,8 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
                 },
                 selectedSource: _selectedSource,
                 sources: _videoResponse?.sources ?? [],
-                onSourceSelected: _selectSource,
+                onSourceSelected: (source) =>
+                    _selectSource(source, resumePositionMs: null),
               ),
             ],
           ),
