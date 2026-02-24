@@ -73,9 +73,7 @@ class SettingsScreen extends ConsumerWidget {
               Icons.chevron_right_rounded,
               color: NijiColors.textTertiary,
             ),
-            onTap: () {
-              // TODO: Navigate to tracking settings (Sprint 6)
-            },
+            onTap: () => context.push('/settings/tracking'),
           ),
           const Divider(),
 

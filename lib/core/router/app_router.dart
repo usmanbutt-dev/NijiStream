@@ -15,6 +15,7 @@ import '../../features/library/library_screen.dart';
 import '../../features/downloads/downloads_screen.dart';
 import '../../features/settings/settings_screen.dart';
 import '../../features/settings/extension_management_screen.dart';
+import '../../features/settings/tracking_accounts_screen.dart';
 import '../../features/anime/anime_detail_screen.dart';
 import '../utils/platform_utils.dart';
 
@@ -136,6 +137,12 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings/extensions',
       builder: (context, state) => const ExtensionManagementScreen(),
+    ),
+
+    // ── Tracking Accounts ──
+    GoRoute(
+      path: '/settings/tracking',
+      builder: (context, state) => const TrackingAccountsScreen(),
     ),
   ],
 );

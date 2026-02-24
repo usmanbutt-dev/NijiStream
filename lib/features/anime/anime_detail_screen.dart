@@ -16,6 +16,7 @@ import '../../data/repositories/library_repository.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
 import '../player/video_player_screen.dart';
+import '../../data/services/download_service.dart';
 
 class AnimeDetailScreen extends ConsumerStatefulWidget {
   final String extensionId;
@@ -258,6 +259,7 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
                   final episode = detail.episodes[index];
                   return _EpisodeTile(
                     episode: episode,
+                    extensionId: widget.extensionId,
                     theme: theme,
                     onTap: () {
                       Navigator.of(context).push(
@@ -642,19 +644,21 @@ class _GenresSection extends StatelessWidget {
 // Episode Tile
 // ═══════════════════════════════════════════════════════════════════
 
-class _EpisodeTile extends StatelessWidget {
+class _EpisodeTile extends ConsumerWidget {
   final ExtensionEpisode episode;
+  final String extensionId;
   final ThemeData theme;
   final VoidCallback onTap;
 
   const _EpisodeTile({
     required this.episode,
+    required this.extensionId,
     required this.theme,
     required this.onTap,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return ListTile(
       leading: Container(
         width: 40,
@@ -679,9 +683,33 @@ class _EpisodeTile extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: Icon(
-        Icons.play_circle_outline_rounded,
-        color: theme.colorScheme.primary.withValues(alpha: 0.7),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Download button — enqueues the episode URL
+          IconButton(
+            icon: const Icon(Icons.download_outlined, size: 20),
+            color: theme.colorScheme.primary.withValues(alpha: 0.7),
+            tooltip: 'Download',
+            onPressed: () {
+              ref.read(downloadServiceProvider).enqueue(
+                    episodeId: '$extensionId:${episode.id}',
+                    url: episode.url,
+                  );
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Added to download queue'),
+                  behavior: SnackBarBehavior.floating,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+          Icon(
+            Icons.play_circle_outline_rounded,
+            color: theme.colorScheme.primary.withValues(alpha: 0.7),
+          ),
+        ],
       ),
       onTap: onTap,
     );

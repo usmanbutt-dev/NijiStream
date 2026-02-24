@@ -11,6 +11,7 @@ import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
 import '../../data/database/app_database.dart';
 import '../../data/database/database_provider.dart';
+import '../../data/services/download_service.dart';
 
 // ── Provider ─────────────────────────────────────────────────────────────────
 
@@ -74,15 +75,15 @@ class DownloadsScreen extends ConsumerWidget {
     _MenuAction action,
     List<DownloadTasksTableData> tasks,
   ) {
-    final db = ref.read(databaseProvider);
+    final svc = ref.read(downloadServiceProvider);
     switch (action) {
       case _MenuAction.clearCompleted:
         for (final t in tasks.where((t) => t.status == DownloadStatus.completed)) {
-          db.deleteDownloadTask(t.id);
+          svc.cancel(t.id);
         }
       case _MenuAction.clearFailed:
         for (final t in tasks.where((t) => t.status == DownloadStatus.failed)) {
-          db.deleteDownloadTask(t.id);
+          svc.cancel(t.id);
         }
     }
   }
@@ -177,12 +178,46 @@ class _DownloadTile extends ConsumerWidget {
           ),
         ],
       ),
-      trailing: IconButton(
-        icon: const Icon(Icons.delete_outline_rounded, size: 20),
-        color: NijiColors.textTertiary,
-        onPressed: () => ref.read(databaseProvider).deleteDownloadTask(task.id),
-      ),
+      trailing: _trailingActions(context, ref),
       isThreeLine: true,
+    );
+  }
+
+  Widget _trailingActions(BuildContext context, WidgetRef ref) {
+    final svc = ref.read(downloadServiceProvider);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Pause / Resume toggle
+        if (task.status == DownloadStatus.downloading)
+          IconButton(
+            icon: const Icon(Icons.pause_rounded, size: 20),
+            color: NijiColors.warning,
+            tooltip: 'Pause',
+            onPressed: () => svc.pause(task.id),
+          )
+        else if (task.status == DownloadStatus.paused)
+          IconButton(
+            icon: const Icon(Icons.play_arrow_rounded, size: 20),
+            color: NijiColors.info,
+            tooltip: 'Resume',
+            onPressed: () => svc.resume(task.id),
+          )
+        else if (task.status == DownloadStatus.failed)
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, size: 20),
+            color: NijiColors.warning,
+            tooltip: 'Retry',
+            onPressed: () => svc.resume(task.id),
+          ),
+        // Cancel / Delete
+        IconButton(
+          icon: const Icon(Icons.close_rounded, size: 20),
+          color: NijiColors.textTertiary,
+          tooltip: task.status == DownloadStatus.completed ? 'Remove' : 'Cancel',
+          onPressed: () => svc.cancel(task.id),
+        ),
+      ],
     );
   }
 

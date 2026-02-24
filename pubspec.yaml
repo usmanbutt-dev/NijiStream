@@ -57,6 +57,10 @@ dependencies:
   media_kit_video: ^2.0.1
   media_kit_libs_video: ^1.0.7
 
+  # OAuth / deep-link handling
+  url_launcher: ^6.3.1
+  app_links: ^6.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

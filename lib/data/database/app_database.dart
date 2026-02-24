@@ -168,6 +168,20 @@ class AppDatabase extends _$AppDatabase {
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // Tracking account helpers
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Upsert a tracking account (insert or replace by id).
+  Future<void> upsertTrackingAccount(TrackingAccountsTableCompanion row) =>
+      into(trackingAccountsTable).insertOnConflictUpdate(row);
+
+  /// Delete a tracking account by service id (e.g. "anilist", "mal").
+  Future<int> deleteTrackingAccount(String serviceId) =>
+      (delete(trackingAccountsTable)
+            ..where((t) => t.id.equals(serviceId)))
+          .go();
+
+  // ═══════════════════════════════════════════════════════════════════
   // Download helpers
   // ═══════════════════════════════════════════════════════════════════
 
