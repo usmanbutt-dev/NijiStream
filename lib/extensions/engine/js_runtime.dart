@@ -83,42 +83,36 @@ class JsRuntime {
   Future<ExtensionSearchResponse> search(String query, int page) async {
     _ensureLoaded();
     final escaped = _escapeJs(query);
-    final result = _runtime.evaluate('''
-      (async () => {
-        const source = new AnimeSource();
-        const result = await source.search("$escaped", $page);
-        return JSON.stringify(result);
-      })()
+    final json = await _callAsync('''
+      const source = new AnimeSource();
+      const result = await source.search("$escaped", $page);
+      return JSON.stringify(result);
     ''');
-    return _parseSearchResponse(await _resolveAsyncResult(result));
+    return _parseSearchResponse(json);
   }
 
   /// Get anime details including episode list.
   Future<ExtensionAnimeDetail> getDetail(String animeId) async {
     _ensureLoaded();
     final escaped = _escapeJs(animeId);
-    final result = _runtime.evaluate('''
-      (async () => {
-        const source = new AnimeSource();
-        const result = await source.getDetail("$escaped");
-        return JSON.stringify(result);
-      })()
+    final json = await _callAsync('''
+      const source = new AnimeSource();
+      const result = await source.getDetail("$escaped");
+      return JSON.stringify(result);
     ''');
-    return _parseDetailResponse(await _resolveAsyncResult(result));
+    return _parseDetailResponse(json);
   }
 
   /// Get video sources for an episode.
   Future<ExtensionVideoResponse> getVideoSources(String episodeUrl) async {
     _ensureLoaded();
     final escaped = _escapeJs(episodeUrl);
-    final result = _runtime.evaluate('''
-      (async () => {
-        const source = new AnimeSource();
-        const result = await source.getVideoSources("$escaped");
-        return JSON.stringify(result);
-      })()
+    final json = await _callAsync('''
+      const source = new AnimeSource();
+      const result = await source.getVideoSources("$escaped");
+      return JSON.stringify(result);
     ''');
-    return _parseVideoResponse(await _resolveAsyncResult(result));
+    return _parseVideoResponse(json);
   }
 
   /// Get latest anime (optional extension method).
@@ -130,14 +124,12 @@ class JsRuntime {
     if (hasMethod.stringResult != 'true') {
       return const ExtensionSearchResponse();
     }
-    final result = _runtime.evaluate('''
-      (async () => {
-        const source = new AnimeSource();
-        const result = await source.getLatest($page);
-        return JSON.stringify(result);
-      })()
+    final json = await _callAsync('''
+      const source = new AnimeSource();
+      const result = await source.getLatest($page);
+      return JSON.stringify(result);
     ''');
-    return _parseSearchResponse(await _resolveAsyncResult(result));
+    return _parseSearchResponse(json);
   }
 
   /// Get popular anime (optional extension method).
@@ -149,14 +141,12 @@ class JsRuntime {
     if (hasMethod.stringResult != 'true') {
       return const ExtensionSearchResponse();
     }
-    final result = _runtime.evaluate('''
-      (async () => {
-        const source = new AnimeSource();
-        const result = await source.getPopular($page);
-        return JSON.stringify(result);
-      })()
+    final json = await _callAsync('''
+      const source = new AnimeSource();
+      const result = await source.getPopular($page);
+      return JSON.stringify(result);
     ''');
-    return _parseSearchResponse(await _resolveAsyncResult(result));
+    return _parseSearchResponse(json);
   }
 
   /// Dispose of the JS runtime and free resources.
@@ -176,32 +166,35 @@ class JsRuntime {
   void _registerBridgeFunctions() {
     // ── http.get ──
     _runtime.onMessage('http_get', (args) {
-      final parsed = jsonDecode(args) as Map<String, dynamic>;
-      final url = parsed['url'] as String;
-      final headers = (parsed['headers'] as Map<String, dynamic>?)
+      final envelope = jsonDecode(args) as Map<String, dynamic>;
+      final id = envelope['id'] as String;
+      final data = envelope['data'] as Map<String, dynamic>;
+      final url = data['url'] as String;
+      final headers = (data['headers'] as Map<String, dynamic>?)
           ?.map((k, v) => MapEntry(k, v.toString()));
-      // flutter_js's onMessage is synchronous, so we need a workaround
-      // for async bridge calls. We'll use a pending promise pattern —
-      // see _bridgeJsCode for the JS side.
       _bridge.httpGet(url, headers).then((result) {
         _runtime.evaluate(
-          '_resolvePending("http_get", ${jsonEncode(result)})',
+          '_resolvePending(${jsonEncode(id)}, ${jsonEncode(result)})',
         );
+        _runtime.executePendingJob();
       });
       return '';
     });
 
     // ── http.post ──
     _runtime.onMessage('http_post', (args) {
-      final parsed = jsonDecode(args) as Map<String, dynamic>;
-      final url = parsed['url'] as String;
-      final body = parsed['body'] as String? ?? '';
-      final headers = (parsed['headers'] as Map<String, dynamic>?)
+      final envelope = jsonDecode(args) as Map<String, dynamic>;
+      final id = envelope['id'] as String;
+      final data = envelope['data'] as Map<String, dynamic>;
+      final url = data['url'] as String;
+      final body = data['body'] as String? ?? '';
+      final headers = (data['headers'] as Map<String, dynamic>?)
           ?.map((k, v) => MapEntry(k, v.toString()));
       _bridge.httpPost(url, body, headers).then((result) {
         _runtime.evaluate(
-          '_resolvePending("http_post", ${jsonEncode(result)})',
+          '_resolvePending(${jsonEncode(id)}, ${jsonEncode(result)})',
         );
+        _runtime.executePendingJob();
       });
       return '';
     });
@@ -272,19 +265,56 @@ class JsRuntime {
         .replaceAll('\r', '\\r');
   }
 
-  /// Resolve an async JS result.
+  /// Run an async JS body and return the resolved string value.
   ///
-  /// flutter_js handles Promises internally, but we may need to
-  /// handle the executePendingJob() loop for async operations.
-  Future<String> _resolveAsyncResult(JsEvalResult result) async {
-    if (result.isError) {
-      throw Exception('JS execution error: ${result.stringResult}');
+  /// flutter_js/QuickJS evaluates code synchronously. When you evaluate an
+  /// `async` IIFE the runtime immediately returns a Promise object — it does
+  /// NOT auto-await it. We work around this by:
+  ///  1. Wrapping the caller's body in an async IIFE that stores its result
+  ///     (or error) in two JS globals: `__nijiResult` / `__nijiError`.
+  ///  2. Calling `executePendingJob()` in a loop (yielding to the Dart event
+  ///     loop each iteration) until one of those globals is set.
+  ///  3. Reading the global back with a second `evaluate()` call.
+  ///
+  /// This correctly handles both pure-sync extensions (like the example
+  /// source that returns hard-coded data) and extensions that `await`
+  /// async bridge calls.
+  Future<String> _callAsync(String asyncBody) async {
+    // Clear the result slots and kick off the async work.
+    _runtime.evaluate('var __nijiResult = undefined; var __nijiError = undefined;');
+    _runtime.evaluate('''
+      (async () => {
+        try {
+          var __ret = (async () => { $asyncBody })();
+          __ret.then(function(v) { __nijiResult = v; })
+               .catch(function(e) { __nijiError = String(e); });
+        } catch(e) {
+          __nijiError = String(e);
+        }
+      })();
+    ''');
+
+    // Spin the job loop until the result lands.
+    // Yield to the Dart event loop between each tick so that Dart-side
+    // async work (e.g. HTTP bridge calls) can complete.
+    for (var i = 0; i < 2000; i++) {
+      _runtime.executePendingJob();
+
+      final errCheck = _runtime.evaluate('__nijiError !== undefined ? String(__nijiError) : ""');
+      if (errCheck.stringResult.isNotEmpty) {
+        throw Exception('JS async error: ${errCheck.stringResult}');
+      }
+
+      final check = _runtime.evaluate('__nijiResult !== undefined ? String(__nijiResult) : ""');
+      if (check.stringResult.isNotEmpty) {
+        return check.stringResult;
+      }
+
+      // Yield to Dart event loop.
+      await Future<void>.delayed(Duration.zero);
     }
 
-    // Execute pending async jobs (for Promise resolution).
-    _runtime.executePendingJob();
-
-    return result.stringResult;
+    throw Exception('JS async call timed out after 2000 iterations');
   }
 
   ExtensionSearchResponse _parseSearchResponse(String json) {
@@ -358,33 +388,35 @@ class JsRuntime {
 // ═══════════════════════════════════════════════════════════════════════
 
 const _bridgeJsCode = r'''
-// ── Pending promise system for async bridge calls ──
-// Since flutter_js's sendMessage is synchronous but HTTP calls are async,
-// we use a simple polling-based promise resolution pattern.
+// ── HTTP bridge ──
+// http.get / http.post return Promises.
+// The Dart side processes the request asynchronously and resolves the
+// pending promise via _resolvePending() injected back into the runtime.
+var __httpPending = {};
+var __httpNextId = 0;
 
-var _pendingCallbacks = {};
-var _pendingId = 0;
+function __makeHttpPromise(channel, args) {
+  var id = String(__httpNextId++);
+  var p = new Promise(function(resolve) {
+    __httpPending[id] = resolve;
+  });
+  sendMessage(channel, JSON.stringify({ id: id, data: args }));
+  return p;
+}
 
-function _resolvePending(channel, result) {
-  if (_pendingCallbacks[channel]) {
-    _pendingCallbacks[channel](result);
-    delete _pendingCallbacks[channel];
+function _resolvePending(id, result) {
+  if (__httpPending[id]) {
+    __httpPending[id](result);
+    delete __httpPending[id];
   }
 }
 
-// ── HTTP bridge ──
 var http = {
   get: function(url, headers) {
-    var args = JSON.stringify({ url: url, headers: headers || {} });
-    sendMessage("http_get", args);
-    // Note: In the synchronous flutter_js model, the response will be
-    // available after the Dart side processes the message.
-    // For MVP, we use the synchronous sendMessage return value.
-    return sendMessage("http_get", args);
+    return __makeHttpPromise("http_get", { url: url, headers: headers || {} });
   },
   post: function(url, body, headers) {
-    var args = JSON.stringify({ url: url, body: body, headers: headers || {} });
-    return sendMessage("http_post", args);
+    return __makeHttpPromise("http_post", { url: url, body: body || "", headers: headers || {} });
   }
 };
 
