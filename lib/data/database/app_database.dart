@@ -124,6 +124,26 @@ class AppDatabase extends _$AppDatabase {
   Future<int> removeFromLibrary(String animeId) =>
       (delete(userLibraryTable)..where((t) => t.animeId.equals(animeId))).go();
 
+  /// Watch the N most recently updated library items with status 'watching'.
+  /// Used by the Home screen's "Continue Watching" row.
+  Stream<List<LibraryItem>> watchContinueWatching({int limit = 10}) {
+    final query = select(userLibraryTable).join([
+      innerJoin(animeTable, animeTable.id.equalsExp(userLibraryTable.animeId)),
+    ]);
+    query.where(userLibraryTable.status.equals('watching'));
+    query.orderBy([OrderingTerm.desc(userLibraryTable.updatedAt)]);
+    query.limit(limit);
+
+    return query.watch().map(
+          (rows) => rows
+              .map((row) => LibraryItem(
+                    anime: row.readTable(animeTable),
+                    library: row.readTable(userLibraryTable),
+                  ))
+              .toList(),
+        );
+  }
+
   /// Watch all library items joined with their anime data.
   /// Pass [status] to filter by a specific status, or null for all.
   Stream<List<LibraryItem>> watchLibrary({String? status}) {
@@ -146,6 +166,21 @@ class AppDatabase extends _$AppDatabase {
               .toList(),
         );
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Download helpers
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Watch all download tasks ordered by creation time (newest first).
+  Stream<List<DownloadTasksTableData>> watchDownloadTasks() {
+    return (select(downloadTasksTable)
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .watch();
+  }
+
+  /// Remove a download task by id.
+  Future<int> deleteDownloadTask(int id) =>
+      (delete(downloadTasksTable)..where((t) => t.id.equals(id))).go();
 }
 
 /// Open a persistent SQLite database stored in the app's documents directory.
