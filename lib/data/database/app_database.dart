@@ -120,6 +120,22 @@ class AppDatabase extends _$AppDatabase {
     }
   }
 
+  /// Increment the watched-episode counter for a library entry.
+  ///
+  /// Only increments if the new value is greater than the stored value,
+  /// so re-watching an episode doesn't double-count.
+  Future<void> setProgressIfGreater(String animeId, int newProgress) async {
+    final existing = await getLibraryEntry(animeId);
+    if (existing == null) return;
+    if (newProgress <= existing.progress) return;
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    await (update(userLibraryTable)..where((t) => t.animeId.equals(animeId)))
+        .write(UserLibraryTableCompanion(
+      progress: Value(newProgress),
+      updatedAt: Value(now),
+    ));
+  }
+
   /// Remove an anime from the library.
   Future<int> removeFromLibrary(String animeId) =>
       (delete(userLibraryTable)..where((t) => t.animeId.equals(animeId))).go();

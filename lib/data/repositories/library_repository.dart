@@ -53,6 +53,17 @@ class LibraryRepository {
     await _db.upsertLibraryEntry(animeId: dbAnimeId, status: status);
   }
 
+  // ── Progress ──────────────────────────────────────────────────────
+
+  /// Update the watched-episode counter, but only if [newProgress] is higher
+  /// than the stored value (prevents rewatching from resetting progress).
+  Future<void> setProgressIfGreater({
+    required String extensionId,
+    required String animeId,
+    required int newProgress,
+  }) =>
+      _db.setProgressIfGreater('$extensionId:$animeId', newProgress);
+
   // ── Remove ────────────────────────────────────────────────────────
 
   /// Remove an anime from the library.

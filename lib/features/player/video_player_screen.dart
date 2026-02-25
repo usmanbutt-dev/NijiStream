@@ -269,8 +269,16 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   }
 
   void _onPlaybackComplete() {
-    // Mark episode as completed.
+    // Mark episode as completed in SharedPreferences.
     _progressService.markCompleted(widget.extensionId, widget.episodeId);
+
+    // Update watched-episode count in the library DB.
+    // episodeNumber is 1-based, so it directly represents episodes watched.
+    ref.read(libraryRepositoryProvider).setProgressIfGreater(
+          extensionId: widget.extensionId,
+          animeId: widget.animeId,
+          newProgress: widget.episodeNumber,
+        );
 
     // Auto-play next episode if available.
     if (widget.episodes != null && widget.currentEpisodeIndex != null) {

@@ -646,7 +646,7 @@ class _GenresSection extends StatelessWidget {
 // Episode Tile
 // ═══════════════════════════════════════════════════════════════════
 
-class _EpisodeTile extends ConsumerWidget {
+class _EpisodeTile extends ConsumerStatefulWidget {
   final ExtensionEpisode episode;
   final String extensionId;
   final ThemeData theme;
@@ -660,7 +660,70 @@ class _EpisodeTile extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_EpisodeTile> createState() => _EpisodeTileState();
+}
+
+class _EpisodeTileState extends ConsumerState<_EpisodeTile> {
+  bool _enqueuing = false;
+
+  Future<void> _download() async {
+    if (_enqueuing) return;
+    setState(() => _enqueuing = true);
+
+    try {
+      // Resolve the actual stream URL via the extension before downloading.
+      final repo = ref.read(extensionRepositoryProvider);
+      final response = await repo.getVideoSources(
+        widget.extensionId,
+        widget.episode.id,
+      );
+
+      if (!mounted) return;
+
+      if (response == null || response.sources.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No downloadable source found'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+
+      final source = response.sources.first;
+      await ref.read(downloadServiceProvider).enqueue(
+            episodeId: '${widget.extensionId}:${widget.episode.id}',
+            url: source.url,
+            headers: source.headers,
+          );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Added to download queue'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Download failed: $e'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _enqueuing = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return ListTile(
       leading: Container(
         width: 40,
@@ -671,49 +734,43 @@ class _EpisodeTile extends ConsumerWidget {
         ),
         child: Center(
           child: Text(
-            '${episode.number}',
-            style: theme.textTheme.titleSmall?.copyWith(
+            '${widget.episode.number}',
+            style: widget.theme.textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.bold,
-              color: theme.colorScheme.primary,
+              color: widget.theme.colorScheme.primary,
             ),
           ),
         ),
       ),
       title: Text(
-        episode.title ?? 'Episode ${episode.number}',
-        style: theme.textTheme.bodyMedium,
+        widget.episode.title ?? 'Episode ${widget.episode.number}',
+        style: widget.theme.textTheme.bodyMedium,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Download button — enqueues the episode URL
-          IconButton(
-            icon: const Icon(Icons.download_outlined, size: 20),
-            color: theme.colorScheme.primary.withValues(alpha: 0.7),
-            tooltip: 'Download',
-            onPressed: () {
-              ref.read(downloadServiceProvider).enqueue(
-                    episodeId: '$extensionId:${episode.id}',
-                    url: episode.url,
-                  );
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Added to download queue'),
-                  behavior: SnackBarBehavior.floating,
-                  duration: Duration(seconds: 2),
+          // Download button — resolves stream URL then enqueues
+          _enqueuing
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : IconButton(
+                  icon: const Icon(Icons.download_outlined, size: 20),
+                  color: widget.theme.colorScheme.primary.withValues(alpha: 0.7),
+                  tooltip: 'Download',
+                  onPressed: _download,
                 ),
-              );
-            },
-          ),
           Icon(
             Icons.play_circle_outline_rounded,
-            color: theme.colorScheme.primary.withValues(alpha: 0.7),
+            color: widget.theme.colorScheme.primary.withValues(alpha: 0.7),
           ),
         ],
       ),
-      onTap: onTap,
+      onTap: widget.onTap,
     );
   }
 }
