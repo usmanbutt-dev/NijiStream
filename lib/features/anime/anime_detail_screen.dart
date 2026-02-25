@@ -266,12 +266,14 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
                         MaterialPageRoute(
                           builder: (_) => VideoPlayerScreen(
                             extensionId: widget.extensionId,
+                            animeId: widget.animeId,
                             episodeId: episode.id,
                             animeTitle: detail.title,
                             episodeNumber: episode.number,
                             episodeTitle: episode.title,
                             episodes: detail.episodes,
                             currentEpisodeIndex: index,
+                            animeDetail: detail,
                           ),
                         ),
                       );

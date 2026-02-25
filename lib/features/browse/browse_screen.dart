@@ -27,6 +27,7 @@ class BrowseScreen extends ConsumerStatefulWidget {
 class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
+  bool _popularLoaded = false;
 
   @override
   void dispose() {
@@ -42,6 +43,8 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   void _clearSearch() {
     _searchController.clear();
     _searchFocusNode.unfocus();
+    // After clearing, reload popular so the grid repopulates.
+    _popularLoaded = false;
     ref.read(searchNotifierProvider.notifier).clear();
   }
 
@@ -50,6 +53,18 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     final theme = Theme.of(context);
     final extensionState = ref.watch(extensionNotifierProvider);
     final searchState = ref.watch(searchNotifierProvider);
+
+    // Once extensions finish loading, auto-fetch popular content.
+    if (!extensionState.isLoading &&
+        extensionState.loadedExtensions.isNotEmpty &&
+        !_popularLoaded &&
+        !searchState.hasResults &&
+        searchState.query.isEmpty) {
+      _popularLoaded = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(searchNotifierProvider.notifier).loadPopular();
+      });
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -118,7 +133,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
       return _AnimeGrid(results: filtered);
     }
 
-    // Default: prompt to search
+    // Default: only reached if extension has no getPopular().
     return _DefaultBrowseView(theme: theme);
   }
 }

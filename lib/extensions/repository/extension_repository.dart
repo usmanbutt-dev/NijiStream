@@ -221,6 +221,21 @@ class ExtensionRepository {
     }
   }
 
+  /// Get popular anime from a specific extension.
+  Future<ExtensionSearchResponse?> getPopular(
+    String extensionId,
+    int page,
+  ) async {
+    final runtime = _runtimes[extensionId];
+    if (runtime == null) return null;
+    try {
+      return await runtime.getPopular(page);
+    } catch (e) {
+      debugPrint('getPopular failed for $extensionId: $e');
+      return null;
+    }
+  }
+
   /// Get video sources from a specific extension.
   Future<ExtensionVideoResponse?> getVideoSources(
     String extensionId,

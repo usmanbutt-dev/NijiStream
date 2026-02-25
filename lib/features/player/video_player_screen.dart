@@ -19,12 +19,14 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../core/theme/colors.dart';
+import '../../data/repositories/library_repository.dart';
 import '../../data/services/watch_progress_service.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
 
 class VideoPlayerScreen extends ConsumerStatefulWidget {
   final String extensionId;
+  final String animeId;
   final String episodeId;
   final String animeTitle;
   final int episodeNumber;
@@ -34,15 +36,20 @@ class VideoPlayerScreen extends ConsumerStatefulWidget {
   final List<ExtensionEpisode>? episodes;
   final int? currentEpisodeIndex;
 
+  /// Optional: full anime detail used to auto-register in library on watch.
+  final ExtensionAnimeDetail? animeDetail;
+
   const VideoPlayerScreen({
     super.key,
     required this.extensionId,
+    required this.animeId,
     required this.episodeId,
     required this.animeTitle,
     required this.episodeNumber,
     this.episodeTitle,
     this.episodes,
     this.currentEpisodeIndex,
+    this.animeDetail,
   });
 
   @override
@@ -172,6 +179,9 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
               : null;
 
       _selectSource(response.sources.first, resumePositionMs: resumeMs);
+
+      // Auto-register in library as "watching" if not already added.
+      _autoAddToLibrary();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -180,6 +190,30 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
         });
       }
     }
+  }
+
+  /// Auto-add this anime to the library with status "watching" when playback
+  /// starts, but only if it isn't already in the library.
+  Future<void> _autoAddToLibrary() async {
+    final detail = widget.animeDetail;
+    if (detail == null) return;
+    try {
+      final libraryRepo = ref.read(libraryRepositoryProvider);
+      final existing = await libraryRepo
+          .watchEntry(
+            extensionId: widget.extensionId,
+            animeId: widget.animeId,
+          )
+          .first;
+      if (existing == null) {
+        await libraryRepo.addToLibrary(
+          extensionId: widget.extensionId,
+          animeId: widget.animeId,
+          detail: detail,
+          status: 'watching',
+        );
+      }
+    } catch (_) {}
   }
 
   void _selectSource(
@@ -261,12 +295,14 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
       MaterialPageRoute(
         builder: (_) => VideoPlayerScreen(
           extensionId: widget.extensionId,
+          animeId: widget.animeId,
           episodeId: episode.id,
           animeTitle: widget.animeTitle,
           episodeNumber: episode.number,
           episodeTitle: episode.title,
           episodes: widget.episodes,
           currentEpisodeIndex: index,
+          animeDetail: widget.animeDetail,
         ),
       ),
     );

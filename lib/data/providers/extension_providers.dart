@@ -171,6 +171,40 @@ class SearchNotifier extends StateNotifier<SearchState> {
     state = state.copyWith(sortOrder: order);
   }
 
+  /// Load popular anime from all extensions (shown on browse screen open).
+  Future<void> loadPopular() async {
+    if (_repo.loadedCount == 0) return;
+
+    state = state.copyWith(isSearching: true);
+
+    try {
+      final results = <SearchResultWithSource>[];
+      for (final id in _repo.loadedExtensionIds) {
+        try {
+          final resp = await _repo.getPopular(id, 1);
+          if (resp != null) {
+            final manifest = _repo.getManifest(id);
+            for (final r in resp.results) {
+              results.add(SearchResultWithSource(
+                result: r,
+                extensionId: id,
+                extensionName: manifest?.name ?? id,
+              ));
+            }
+          }
+        } catch (_) {}
+      }
+      state = state.copyWith(
+        isSearching: false,
+        results: results,
+        hasResults: results.isNotEmpty,
+        query: '',
+      );
+    } catch (_) {
+      state = state.copyWith(isSearching: false);
+    }
+  }
+
   /// Clear search results.
   void clear() {
     state = const SearchState();
