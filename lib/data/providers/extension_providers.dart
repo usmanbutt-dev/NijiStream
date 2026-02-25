@@ -10,6 +10,9 @@ import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
 import '../../extensions/repository/extension_repository.dart';
 
+/// Sentinel value used in copyWith() to distinguish "not provided" from null.
+const _absent = Object();
+
 // ═══════════════════════════════════════════════════════════════════
 // Extension initialization state
 // ═══════════════════════════════════════════════════════════════════
@@ -93,12 +96,12 @@ class ExtensionState {
   ExtensionState copyWith({
     bool? isLoading,
     List<ExtensionManifest>? loadedExtensions,
-    String? error,
+    Object? error = _absent,
   }) {
     return ExtensionState(
       isLoading: isLoading ?? this.isLoading,
       loadedExtensions: loadedExtensions ?? this.loadedExtensions,
-      error: error,
+      error: error == _absent ? this.error : error as String?,
     );
   }
 }
@@ -127,7 +130,7 @@ class SearchNotifier extends StateNotifier<SearchState> {
       return;
     }
 
-    state = state.copyWith(isSearching: true, query: query);
+    state = state.copyWith(isSearching: true, query: query, currentPage: 1, clearResults: true);
 
     try {
       final results = await _repo.searchAll(query, 1);
@@ -145,16 +148,54 @@ class SearchNotifier extends StateNotifier<SearchState> {
         }
       }
 
+      // If any extension returned results, assume more pages may exist.
+      final hasMore = allResults.isNotEmpty;
+
       state = state.copyWith(
         isSearching: false,
         results: allResults,
         hasResults: true,
+        currentPage: 1,
+        canLoadMore: hasMore,
       );
     } catch (e) {
       state = state.copyWith(
         isSearching: false,
         error: e.toString(),
       );
+    }
+  }
+
+  /// Load the next page of search results and append to the current list.
+  Future<void> loadMore() async {
+    if (state.isSearching || !state.canLoadMore || state.query.isEmpty) return;
+
+    final nextPage = state.currentPage + 1;
+    state = state.copyWith(isLoadingMore: true);
+
+    try {
+      final results = await _repo.searchAll(state.query, nextPage);
+
+      final newResults = <SearchResultWithSource>[];
+      for (final entry in results.entries) {
+        final manifest = _repo.getManifest(entry.key);
+        for (final result in entry.value.results) {
+          newResults.add(SearchResultWithSource(
+            result: result,
+            extensionId: entry.key,
+            extensionName: manifest?.name ?? entry.key,
+          ));
+        }
+      }
+
+      state = state.copyWith(
+        isLoadingMore: false,
+        results: [...state.results, ...newResults],
+        currentPage: nextPage,
+        canLoadMore: newResults.isNotEmpty,
+      );
+    } catch (e) {
+      state = state.copyWith(isLoadingMore: false);
     }
   }
 
@@ -243,6 +284,15 @@ class SearchState {
 
   final SearchSortOrder sortOrder;
 
+  /// The last page number that was fetched.
+  final int currentPage;
+
+  /// Whether more pages may be available.
+  final bool canLoadMore;
+
+  /// True while a loadMore() call is in flight (doesn't block the grid).
+  final bool isLoadingMore;
+
   const SearchState({
     this.isSearching = false,
     this.query = '',
@@ -251,6 +301,9 @@ class SearchState {
     this.error,
     this.sourceFilter,
     this.sortOrder = SearchSortOrder.relevance,
+    this.currentPage = 1,
+    this.canLoadMore = false,
+    this.isLoadingMore = false,
   });
 
   /// Results after applying [sourceFilter] and [sortOrder].
@@ -289,19 +342,26 @@ class SearchState {
     String? query,
     List<SearchResultWithSource>? results,
     bool? hasResults,
-    String? error,
+    Object? error = _absent,
     String? sourceFilter,
     bool clearSourceFilter = false,
     SearchSortOrder? sortOrder,
+    int? currentPage,
+    bool? canLoadMore,
+    bool? isLoadingMore,
+    bool clearResults = false,
   }) {
     return SearchState(
       isSearching: isSearching ?? this.isSearching,
       query: query ?? this.query,
-      results: results ?? this.results,
+      results: clearResults ? const [] : (results ?? this.results),
       hasResults: hasResults ?? this.hasResults,
-      error: error,
+      error: error == _absent ? this.error : error as String?,
       sourceFilter: clearSourceFilter ? null : (sourceFilter ?? this.sourceFilter),
       sortOrder: sortOrder ?? this.sortOrder,
+      currentPage: currentPage ?? this.currentPage,
+      canLoadMore: canLoadMore ?? this.canLoadMore,
+      isLoadingMore: isLoadingMore ?? this.isLoadingMore,
     );
   }
 }

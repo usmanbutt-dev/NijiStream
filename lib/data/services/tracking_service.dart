@@ -6,17 +6,19 @@
 /// 1. Open the authorization URL in an external browser via url_launcher.
 /// 2. The browser redirects to `nijistream://oauth?code=...&state=...`
 /// 3. app_links captures that deep-link and we exchange the code for a token.
-/// 4. Token is stored in FlutterSecureStorage.
+/// 4. Token is stored in FlutterSecureStorage (encrypted at rest).
 library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:app_links/app_links.dart';
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants.dart';
@@ -41,6 +43,13 @@ const _kAnilistUsername = 'niji_anilist_username';
 const _kMalToken = 'niji_mal_token';
 const _kMalVerifier = 'niji_mal_verifier'; // PKCE code verifier
 const _kMalUsername = 'niji_mal_username';
+
+// Shared FlutterSecureStorage instance — platform defaults:
+//   Android: EncryptedSharedPreferences
+//   iOS/macOS: Keychain
+//   Windows: DPAPI (no extra config)
+//   Linux: libsecret (requires libsecret-1-dev system package)
+const _secureStorage = FlutterSecureStorage();
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -105,11 +114,10 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
   // ── Initialisation ──────────────────────────────────────────────
 
   Future<void> _loadStoredAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final anilistToken = prefs.getString(_kAnilistToken);
-    final anilistUser = prefs.getString(_kAnilistUsername);
-    final malToken = prefs.getString(_kMalToken);
-    final malUser = prefs.getString(_kMalUsername);
+    final anilistToken = await _secureStorage.read(key: _kAnilistToken);
+    final anilistUser = await _secureStorage.read(key: _kAnilistUsername);
+    final malToken = await _secureStorage.read(key: _kMalToken);
+    final malUser = await _secureStorage.read(key: _kMalUsername);
 
     state = state.copyWith(
       anilistConnected: anilistToken != null,
@@ -148,6 +156,12 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
   /// in the fragment, not a code exchange).  The redirect URI looks like:
   ///   nijistream://oauth#access_token=TOKEN&token_type=Bearer&expires_in=N
   Future<void> connectAnilist() async {
+    // Guard against concurrent OAuth flows
+    if (_oauthCompleter != null && !_oauthCompleter!.isCompleted) {
+      debugPrint('TrackingService: OAuth flow already in progress');
+      return;
+    }
+
     state = state.copyWith(isLoading: true, clearError: true);
 
     try {
@@ -193,15 +207,14 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
       // Fetch the viewer's username
       final username = await _fetchAnilistUsername(token);
 
-      // Persist
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kAnilistToken, token);
+      // Persist token in secure storage (NOT SharedPreferences)
+      await _secureStorage.write(key: _kAnilistToken, value: token);
       if (username != null) {
-        await prefs.setString(_kAnilistUsername, username);
+        await _secureStorage.write(key: _kAnilistUsername, value: username);
       }
+      // Store username (non-sensitive) in DB for display
       await _upsertDbAccount(
         service: 'anilist',
-        token: token,
         username: username,
       );
 
@@ -229,16 +242,18 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
           'query': '{ Viewer { name } }',
         }),
       );
-      return resp.data['data']?['Viewer']?['name'] as String?;
+      final body = resp.data as Map<String, dynamic>?;
+      final data = body?['data'] as Map<String, dynamic>?;
+      final viewer = data?['Viewer'] as Map<String, dynamic>?;
+      return viewer?['name'] as String?;
     } catch (_) {
       return null;
     }
   }
 
   Future<void> disconnectAnilist() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kAnilistToken);
-    await prefs.remove(_kAnilistUsername);
+    await _secureStorage.delete(key: _kAnilistToken);
+    await _secureStorage.delete(key: _kAnilistUsername);
     await _db.deleteTrackingAccount('anilist');
     state = state.copyWith(
       anilistConnected: false,
@@ -249,15 +264,20 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
   // ── MAL OAuth (PKCE) ────────────────────────────────────────────
 
   Future<void> connectMal() async {
+    // Guard against concurrent OAuth flows
+    if (_oauthCompleter != null && !_oauthCompleter!.isCompleted) {
+      debugPrint('TrackingService: OAuth flow already in progress');
+      return;
+    }
+
     state = state.copyWith(isLoading: true, clearError: true);
 
     try {
-      // Generate PKCE code verifier + challenge
+      // Generate cryptographically random PKCE code verifier + challenge
       final verifier = _generateCodeVerifier();
       final challenge = verifier; // MAL supports plain challenge
 
-      final verifierPrefs = await SharedPreferences.getInstance();
-      await verifierPrefs.setString(_kMalVerifier, verifier);
+      await _secureStorage.write(key: _kMalVerifier, value: verifier);
 
       final authUrl = Uri.parse(
         '${ApiUrls.malAuth}'
@@ -309,7 +329,8 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         ),
       );
 
-      final accessToken = tokenResp.data['access_token'] as String?;
+      final tokenBody = tokenResp.data as Map<String, dynamic>?;
+      final accessToken = tokenBody?['access_token'] as String?;
       if (accessToken == null) {
         state = state.copyWith(
           isLoading: false,
@@ -318,18 +339,24 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         return;
       }
 
-      final refreshToken = tokenResp.data['refresh_token'] as String?;
+      final refreshToken = tokenBody?['refresh_token'] as String?;
       final username = await _fetchMalUsername(accessToken);
 
-      final malPrefs = await SharedPreferences.getInstance();
-      await malPrefs.setString(_kMalToken, accessToken);
-      if (username != null) {
-        await malPrefs.setString(_kMalUsername, username);
+      // Persist tokens in secure storage
+      await _secureStorage.write(key: _kMalToken, value: accessToken);
+      if (refreshToken != null) {
+        await _secureStorage.write(
+            key: '${_kMalToken}_refresh', value: refreshToken);
       }
+      if (username != null) {
+        await _secureStorage.write(key: _kMalUsername, value: username);
+      }
+      // Clean up verifier — no longer needed after token exchange
+      await _secureStorage.delete(key: _kMalVerifier);
+
+      // Store username (non-sensitive) in DB for display
       await _upsertDbAccount(
         service: 'mal',
-        token: accessToken,
-        refreshToken: refreshToken,
         username: username,
       );
 
@@ -351,17 +378,17 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
           headers: {'Authorization': 'Bearer $token'},
         ),
       );
-      return resp.data['name'] as String?;
+      return (resp.data as Map<String, dynamic>?)?['name'] as String?;
     } catch (_) {
       return null;
     }
   }
 
   Future<void> disconnectMal() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kMalToken);
-    await prefs.remove(_kMalVerifier);
-    await prefs.remove(_kMalUsername);
+    await _secureStorage.delete(key: _kMalToken);
+    await _secureStorage.delete(key: '${_kMalToken}_refresh');
+    await _secureStorage.delete(key: _kMalVerifier);
+    await _secureStorage.delete(key: _kMalUsername);
     await _db.deleteTrackingAccount('mal');
     state = state.copyWith(
       malConnected: false,
@@ -371,28 +398,30 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
 
   // ── Helpers ─────────────────────────────────────────────────────
 
+  /// Upsert a tracking account — only stores non-sensitive metadata in DB.
+  /// Tokens are kept exclusively in FlutterSecureStorage.
   Future<void> _upsertDbAccount({
     required String service,
-    required String token,
-    String? refreshToken,
     String? username,
   }) async {
-    await _db.upsertTrackingAccount(TrackingAccountsTableCompanion(
-      id: Value(service),
-      service: Value(service),
+    await _db.upsertTrackingAccount(TrackingAccountsTableCompanion.insert(
+      id: service,
+      service: service,
       username: Value(username),
-      accessToken: Value(token),
-      refreshToken: Value(refreshToken),
+      // Tokens intentionally NOT stored in SQLite — use secure storage instead.
+      accessToken: const Value(null),
+      refreshToken: const Value(null),
     ));
   }
 
-  /// Generates a random PKCE code verifier (43–128 chars, URL-safe).
+  /// Generates a cryptographically random PKCE code verifier (64 chars, URL-safe).
+  ///
+  /// Uses [Random.secure()] which is backed by the OS CSPRNG, not a clock.
   String _generateCodeVerifier() {
     const chars =
         'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
-    final rand = List.generate(
-        64, (index) => chars[(DateTime.now().microsecondsSinceEpoch + index * 7) % chars.length]);
-    return rand.join();
+    final rand = Random.secure();
+    return List.generate(64, (_) => chars[rand.nextInt(chars.length)]).join();
   }
 }
 

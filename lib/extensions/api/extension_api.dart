@@ -20,6 +20,6 @@ import '../repository/extension_repository.dart';
 final extensionRepositoryProvider = Provider<ExtensionRepository>((ref) {
   final repo = ExtensionRepository();
   // Dispose all runtimes when the provider is disposed.
-  ref.onDispose(() => repo.disposeAll());
+  ref.onDispose(repo.disposeAll);
   return repo;
 });

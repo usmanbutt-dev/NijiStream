@@ -35,11 +35,11 @@ class TrackingAccountsScreen extends ConsumerWidget {
             isConnected: tracking.anilistConnected,
             username: tracking.anilistUsername,
             isLoading: tracking.isLoading,
-            onConnect: () => notifier.connectAnilist(),
+            onConnect: notifier.connectAnilist,
             onDisconnect: () => _confirmDisconnect(
               context,
               name: 'AniList',
-              onConfirm: () => notifier.disconnectAnilist(),
+              onConfirm: notifier.disconnectAnilist,
             ),
           ),
 
@@ -53,11 +53,11 @@ class TrackingAccountsScreen extends ConsumerWidget {
             isConnected: tracking.malConnected,
             username: tracking.malUsername,
             isLoading: tracking.isLoading,
-            onConnect: () => notifier.connectMal(),
+            onConnect: notifier.connectMal,
             onDisconnect: () => _confirmDisconnect(
               context,
               name: 'MyAnimeList',
-              onConfirm: () => notifier.disconnectMal(),
+              onConfirm: notifier.disconnectMal,
             ),
           ),
 

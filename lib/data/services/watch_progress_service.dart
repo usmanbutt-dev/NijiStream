@@ -1,12 +1,14 @@
 /// NijiStream — Watch progress persistence service.
 ///
-/// Saves and restores episode playback positions using SharedPreferences,
-/// enabling seamless resume across app sessions.
+/// Saves and restores episode playback positions using the drift SQLite
+/// database. Backed by [WatchProgressTable] for durability (survives
+/// app cache clears unlike SharedPreferences).
 library;
 
-import 'dart:convert';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:shared_preferences/shared_preferences.dart';
+import '../database/app_database.dart';
+import '../database/database_provider.dart';
 
 /// A saved playback position for a single episode.
 class WatchProgressEntry {
@@ -21,45 +23,27 @@ class WatchProgressEntry {
     required this.durationMs,
     this.completed = false,
   });
-
-  Map<String, dynamic> toJson() => {
-        'positionMs': positionMs,
-        'durationMs': durationMs,
-        'completed': completed,
-      };
-
-  factory WatchProgressEntry.fromJson(Map<String, dynamic> json) {
-    return WatchProgressEntry(
-      positionMs: json['positionMs'] as int? ?? 0,
-      durationMs: json['durationMs'] as int? ?? 0,
-      completed: json['completed'] as bool? ?? false,
-    );
-  }
 }
 
-/// Persists and retrieves episode watch progress via SharedPreferences.
+/// Persists and retrieves episode watch progress via the SQLite database.
 class WatchProgressService {
-  static const _prefix = 'niji_wp__';
+  final AppDatabase _db;
 
-  /// Build the SharedPreferences key for an episode.
-  String _key(String extensionId, String episodeId) =>
-      '$_prefix${extensionId}__$episodeId';
+  WatchProgressService(this._db);
 
   /// Load the saved progress for an episode. Returns null if none exists.
   Future<WatchProgressEntry?> load(
     String extensionId,
     String episodeId,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key(extensionId, episodeId));
-    if (raw == null) return null;
-    try {
-      return WatchProgressEntry.fromJson(
-        jsonDecode(raw) as Map<String, dynamic>,
-      );
-    } catch (_) {
-      return null;
-    }
+    final animeId = extensionId; // stored as extensionId in this context
+    final row = await _db.getWatchProgress(animeId, episodeId);
+    if (row == null) return null;
+    return WatchProgressEntry(
+      positionMs: row.positionMs,
+      durationMs: row.durationMs,
+      completed: row.completed == 1,
+    );
   }
 
   /// Persist the current playback position for an episode.
@@ -68,10 +52,12 @@ class WatchProgressService {
     String episodeId,
     WatchProgressEntry entry,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _key(extensionId, episodeId),
-      jsonEncode(entry.toJson()),
+    await _db.upsertWatchProgress(
+      animeId: extensionId,
+      episodeId: episodeId,
+      positionMs: entry.positionMs,
+      durationMs: entry.durationMs,
+      completed: entry.completed,
     );
   }
 
@@ -89,3 +75,8 @@ class WatchProgressService {
     );
   }
 }
+
+/// Riverpod provider for [WatchProgressService].
+final watchProgressServiceProvider = Provider<WatchProgressService>((ref) {
+  return WatchProgressService(ref.read(databaseProvider));
+});

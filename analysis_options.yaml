@@ -1,28 +1,36 @@
-# This file configures the analyzer, which statically analyzes Dart code to
-# check for errors, warnings, and lints.
+# NijiStream — Dart analysis options.
 #
-# The issues identified by the analyzer are surfaced in the UI of Dart-enabled
-# IDEs (https://dart.dev/tools#ides-and-editors). The analyzer can also be
-# invoked from the command line by running `flutter analyze`.
+# Extends flutter_lints (the Flutter recommended set) and adds stricter
+# rules appropriate for a production application. Rules are commented with
+# the reason they were enabled.
 
-# The following line activates a set of recommended lints for Flutter apps,
-# packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
-linter:
-  # The lint rules applied to this project can be customized in the
-  # section below to disable rules from the `package:flutter_lints/flutter.yaml`
-  # included above or to enable additional rules. A list of all available lints
-  # and their documentation is published at https://dart.dev/lints.
-  #
-  # Instead of disabling a lint rule for the entire project in the
-  # section below, it can also be suppressed for a single line of code
-  # or a specific dart file by using the `// ignore: name_of_lint` and
-  # `// ignore_for_file: name_of_lint` syntax on the line or in the file
-  # producing the lint.
-  rules:
-    # avoid_print: false  # Uncomment to disable the `avoid_print` rule
-    # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
+analyzer:
+  errors:
+    # Treat these as errors so CI will fail on them.
+    missing_return: error
+    dead_code: warning
+    unused_import: warning
+    unused_local_variable: warning
 
-# Additional information about this file can be found at
-# https://dart.dev/guides/language/analysis-options
+linter:
+  rules:
+    # ── Style ────────────────────────────────────────────────────────────────
+    prefer_single_quotes: true          # consistent string literals
+    require_trailing_commas: true       # cleaner diffs in multi-line calls
+
+    # ── Safety ───────────────────────────────────────────────────────────────
+    avoid_print: true                   # use debugPrint() instead
+    avoid_dynamic_calls: true           # catches untyped JS interop leaks
+    cancel_subscriptions: true          # StreamSubscriptions must be cancelled
+    close_sinks: true                   # StreamControllers/IOSinks must be closed
+
+    # ── Best practices ───────────────────────────────────────────────────────
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    prefer_final_fields: true
+    prefer_final_locals: true
+    unnecessary_await_in_return: true
+    unnecessary_lambdas: true
+    use_string_buffers: true

@@ -25,6 +25,7 @@ library;
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_js/flutter_js.dart';
 
 import '../api/bridge_functions.dart';
@@ -122,7 +123,9 @@ class JsRuntime {
   }
 
   /// Dispose of the JS runtime and free resources.
+  /// Cancels any in-flight HTTP requests before tearing down the JS context.
   void dispose() {
+    _bridge.cancelAll();
     _runtime.dispose();
   }
 
@@ -197,8 +200,7 @@ class JsRuntime {
 
     // ── log ──
     _runtime.onMessage('niji_log', (dynamic args) {
-      // ignore: avoid_print
-      print('[Extension] $args');
+      debugPrint('[Extension] $args');
       return '';
     });
   }

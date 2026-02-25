@@ -7,10 +7,10 @@ library;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
-import '../../features/anime/anime_detail_screen.dart';
 import '../../data/database/app_database.dart';
 import '../../data/repositories/library_repository.dart';
 
@@ -18,13 +18,13 @@ import '../../data/repositories/library_repository.dart';
 
 /// Reactive stream of all library items (for the "All" tab).
 final _allLibraryProvider = StreamProvider<List<LibraryItem>>((ref) {
-  return ref.read(libraryRepositoryProvider).watchLibrary();
+  return ref.watch(libraryRepositoryProvider).watchLibrary();
 });
 
 /// Reactive stream filtered by a specific [status].
 final _filteredLibraryProvider =
     StreamProvider.family<List<LibraryItem>, String>((ref, status) {
-  return ref.read(libraryRepositoryProvider).watchLibrary(status: status);
+  return ref.watch(libraryRepositoryProvider).watchLibrary(status: status);
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -157,12 +157,9 @@ class _LibraryCard extends StatelessWidget {
     return GestureDetector(
       onTap: () {
         if (extensionId.isNotEmpty) {
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => AnimeDetailScreen(
-              extensionId: extensionId,
-              animeId: animeId,
-            ),
-          ));
+          context.push(
+            '/anime/${Uri.encodeComponent(extensionId)}/${Uri.encodeComponent(animeId)}',
+          );
         }
       },
       child: Column(

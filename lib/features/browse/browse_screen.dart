@@ -28,6 +28,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   bool _popularLoaded = false;
+  int _lastExtensionCount = 0;
 
   @override
   void dispose() {
@@ -53,6 +54,14 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     final theme = Theme.of(context);
     final extensionState = ref.watch(extensionNotifierProvider);
     final searchState = ref.watch(searchNotifierProvider);
+
+    // Reset _popularLoaded whenever the extension count changes so that
+    // installing or removing an extension refreshes the popular grid.
+    final currentCount = extensionState.loadedExtensions.length;
+    if (currentCount != _lastExtensionCount) {
+      _lastExtensionCount = currentCount;
+      _popularLoaded = false;
+    }
 
     // Once extensions finish loading, auto-fetch popular content.
     if (!extensionState.isLoading &&
@@ -241,7 +250,7 @@ class _SortButton extends ConsumerWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.sort_rounded, size: 14, color: NijiColors.textSecondary),
+            const Icon(Icons.sort_rounded, size: 14, color: NijiColors.textSecondary),
             const SizedBox(width: 4),
             Text(
               _sortLabel(sortOrder),
@@ -358,13 +367,15 @@ class _SearchBar extends StatelessWidget {
 // Anime Grid
 // ═══════════════════════════════════════════════════════════════════
 
-class _AnimeGrid extends StatelessWidget {
+class _AnimeGrid extends ConsumerWidget {
   final List<SearchResultWithSource> results;
 
   const _AnimeGrid({required this.results});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final searchState = ref.watch(searchNotifierProvider);
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final crossAxisCount = constraints.maxWidth > 900
@@ -375,18 +386,43 @@ class _AnimeGrid extends StatelessWidget {
                     ? 3
                     : 2;
 
-        return GridView.builder(
-          padding: const EdgeInsets.all(12),
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: crossAxisCount,
-            childAspectRatio: 0.55,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-          ),
-          itemCount: results.length,
-          itemBuilder: (context, index) => _AnimeCard(
-            result: results[index],
-          ),
+        return CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.all(12),
+              sliver: SliverGrid(
+                delegate: SliverChildBuilderDelegate(
+                  (context, index) => _AnimeCard(result: results[index]),
+                  childCount: results.length,
+                ),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: crossAxisCount,
+                  childAspectRatio: 0.55,
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                ),
+              ),
+            ),
+
+            // ── Pagination footer ──
+            if (searchState.canLoadMore || searchState.isLoadingMore)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Center(
+                    child: searchState.isLoadingMore
+                        ? const CircularProgressIndicator()
+                        : TextButton.icon(
+                            onPressed: () => ref
+                                .read(searchNotifierProvider.notifier)
+                                .loadMore(),
+                            icon: const Icon(Icons.expand_more_rounded),
+                            label: const Text('Load more'),
+                          ),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );
@@ -408,7 +444,9 @@ class _AnimeCard extends StatelessWidget {
 
     return InkWell(
       onTap: () {
-        context.push('/anime/${result.extensionId}/${result.result.id}');
+        context.push(
+          '/anime/${Uri.encodeComponent(result.extensionId)}/${Uri.encodeComponent(result.result.id)}',
+        );
       },
       borderRadius: BorderRadius.circular(12),
       child: Column(

@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/usman/.gemini/antigravity/brain/36065d93-12fb-4abb-89fb-50d19885abb4/**)",
+      "Bash(git -C \"d:/Repositories/NijiStream\" diff HEAD -- lib/extensions/models/extension_manifest.dart lib/features/anime/anime_detail_screen.dart lib/main.dart)",
+      "Bash(grep:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(flutter test:*)",
+      "Bash(git push:*)",
+      "Bash(dart analyze:*)",
+      "Bash(dart pub deps:*)",
+      "Bash(flutter pub get:*)",
+      "Bash(flutter build:*)",
+      "Bash(git reset:*)",
+      "Bash(ls:*)",
+      "Bash(du:*)",
+      "Bash(git init:*)",
+      "Bash(gh auth status:*)",
+      "Bash(gh repo create:*)",
+      "Bash(curl:*)",
+      "Bash(Promise]\", so search/detail/video calls all silently returned empty.:*)",
+      "Bash(python3:*)",
+      "Read(//c/Users/usman/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_js-0.8.7/lib/quickjs//**)",
+      "Read(//c/Users/usman/AppData/Local/Pub/Cache/hosted/pub.dev/flutter_js-0.8.7/lib/**)",
+      "Read(//c/Users/**)",
+      "Bash(dart run build_runner build:*)"
+    ],
+    "additionalDirectories": [
+      "D:\\Repositories\\nijistream-extensions"
+    ]
+  }
+}

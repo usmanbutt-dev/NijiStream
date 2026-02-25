@@ -31,7 +31,6 @@ class LibraryItem {
 @DriftDatabase(
   tables: [
     AnimeTable,
-    EpisodesTable,
     UserLibraryTable,
     WatchProgressTable,
     DownloadTasksTable,
@@ -51,7 +50,7 @@ class AppDatabase extends _$AppDatabase {
   /// Bump this when you change the schema. drift will run the
   /// [migration] strategy to update existing databases.
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration {
@@ -61,11 +60,25 @@ class AppDatabase extends _$AppDatabase {
         await m.createAll();
       },
       onUpgrade: (Migrator m, int from, int to) async {
-        // Future migrations go here.
-        // Example:
-        // if (from < 2) {
-        //   await m.addColumn(animeTable, animeTable.newColumn);
-        // }
+        // v1 → v2:
+        //  - Drop the old `episodes` table (never populated; extensions provide
+        //    episodes at runtime, not persistence).
+        //  - Drop old `watch_progress` table that referenced `episodes` via FK.
+        //  - Re-create `watch_progress` without the broken FK constraint.
+        //  - Drop old `download_tasks` table (had broken FK on episodeId).
+        //  - Re-create `download_tasks` without the FK constraint and with new
+        //    `anime_title` + `episode_number` display columns.
+        if (from < 2) {
+          // Drop old tables that had broken FK references.
+          // Using deleteTable(name) — safe even if table doesn't exist (IF EXISTS).
+          await m.deleteTable('watch_progress');
+          await m.deleteTable('download_tasks');
+          await m.deleteTable('episodes');
+
+          // Create updated tables with corrected schema.
+          await m.createTable(watchProgressTable);
+          await m.createTable(downloadTasksTable);
+        }
       },
     );
   }
@@ -93,6 +106,8 @@ class AppDatabase extends _$AppDatabase {
           .watchSingleOrNull();
 
   /// Insert or update a library entry for the given anime.
+  /// If an entry already exists, only [status] and [updatedAt] are updated.
+  /// Progress is NOT overwritten — use [setProgressIfGreater] for that.
   Future<void> upsertLibraryEntry({
     required String animeId,
     required String status,
@@ -103,6 +118,8 @@ class AppDatabase extends _$AppDatabase {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
     if (existing != null) {
+      // Do NOT overwrite status if user already has a deliberate status set.
+      // Only update when caller explicitly changes it (e.g. library sheet).
       await (update(userLibraryTable)
             ..where((t) => t.animeId.equals(animeId)))
           .write(UserLibraryTableCompanion(
@@ -118,6 +135,22 @@ class AppDatabase extends _$AppDatabase {
         updatedAt: Value(now),
       ));
     }
+  }
+
+  /// Add anime to library ONLY if not already present (used by auto-add on play).
+  /// Respects existing status — never overwrites a user's deliberate status.
+  Future<void> insertLibraryIfAbsent({
+    required String animeId,
+    required String status,
+  }) async {
+    final existing = await getLibraryEntry(animeId);
+    if (existing != null) return; // Already in library — preserve existing entry
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    await into(userLibraryTable).insert(UserLibraryTableCompanion(
+      animeId: Value(animeId),
+      status: Value(status),
+      updatedAt: Value(now),
+    ));
   }
 
   /// Increment the watched-episode counter for a library entry.
@@ -184,6 +217,52 @@ class AppDatabase extends _$AppDatabase {
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // Watch progress helpers (SQLite-backed)
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Get the saved watch progress for a specific episode.
+  Future<WatchProgressTableData?> getWatchProgress(
+    String animeId,
+    String episodeId,
+  ) =>
+      (select(watchProgressTable)
+            ..where((t) => t.animeId.equals(animeId) & t.episodeId.equals(episodeId)))
+          .getSingleOrNull();
+
+  /// Save or update the watch progress for an episode.
+  Future<void> upsertWatchProgress({
+    required String animeId,
+    required String episodeId,
+    required int positionMs,
+    required int durationMs,
+    required bool completed,
+  }) async {
+    final existing = await getWatchProgress(animeId, episodeId);
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    if (existing != null) {
+      await (update(watchProgressTable)
+            ..where((t) =>
+                t.animeId.equals(animeId) & t.episodeId.equals(episodeId)))
+          .write(WatchProgressTableCompanion(
+        positionMs: Value(positionMs),
+        durationMs: Value(durationMs),
+        completed: Value(completed ? 1 : 0),
+        updatedAt: Value(now),
+      ));
+    } else {
+      await into(watchProgressTable).insert(WatchProgressTableCompanion(
+        animeId: Value(animeId),
+        episodeId: Value(episodeId),
+        positionMs: Value(positionMs),
+        durationMs: Value(durationMs),
+        completed: Value(completed ? 1 : 0),
+        updatedAt: Value(now),
+      ));
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   // Tracking account helpers
   // ═══════════════════════════════════════════════════════════════════
 
@@ -225,3 +304,4 @@ LazyDatabase _openConnection() {
     return NativeDatabase.createInBackground(file, logStatements: false);
   });
 }
+

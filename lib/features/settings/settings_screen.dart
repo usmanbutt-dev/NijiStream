@@ -17,24 +17,25 @@ const _kDefaultQuality = 'player_default_quality';
 /// Available quality options. "auto" means the extension's first source.
 const _qualityOptions = ['auto', '1080p', '720p', '480p', '360p'];
 
-final _playerSettingsProvider =
-    StateNotifierProvider<_PlayerSettingsNotifier, _PlayerSettings>((ref) {
-  return _PlayerSettingsNotifier();
+/// Public provider — accessed by the video player to apply quality preference.
+final playerSettingsProvider =
+    StateNotifierProvider<PlayerSettingsNotifier, PlayerSettings>((ref) {
+  return PlayerSettingsNotifier();
 });
 
-class _PlayerSettings {
+class PlayerSettings {
   final String defaultQuality;
-  const _PlayerSettings({this.defaultQuality = 'auto'});
+  const PlayerSettings({this.defaultQuality = 'auto'});
 }
 
-class _PlayerSettingsNotifier extends StateNotifier<_PlayerSettings> {
-  _PlayerSettingsNotifier() : super(const _PlayerSettings()) {
+class PlayerSettingsNotifier extends StateNotifier<PlayerSettings> {
+  PlayerSettingsNotifier() : super(const PlayerSettings()) {
     _load();
   }
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = _PlayerSettings(
+    state = PlayerSettings(
       defaultQuality: prefs.getString(_kDefaultQuality) ?? 'auto',
     );
   }
@@ -42,7 +43,7 @@ class _PlayerSettingsNotifier extends StateNotifier<_PlayerSettings> {
   Future<void> setQuality(String quality) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kDefaultQuality, quality);
-    state = _PlayerSettings(defaultQuality: quality);
+    state = PlayerSettings(defaultQuality: quality);
   }
 }
 
@@ -56,7 +57,7 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final playerSettings = ref.watch(_playerSettingsProvider);
+    final playerSettings = ref.watch(playerSettingsProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -112,7 +113,7 @@ class SettingsScreen extends ConsumerWidget {
               onChanged: (q) {
                 if (q != null) {
                   ref
-                      .read(_playerSettingsProvider.notifier)
+                      .read(playerSettingsProvider.notifier)
                       .setQuality(q);
                 }
               },

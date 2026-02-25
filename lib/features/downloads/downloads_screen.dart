@@ -17,7 +17,7 @@ import '../../data/services/download_service.dart';
 
 final _downloadTasksProvider =
     StreamProvider<List<DownloadTasksTableData>>((ref) {
-  return ref.read(databaseProvider).watchDownloadTasks();
+  return ref.watch(databaseProvider).watchDownloadTasks();
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -144,7 +144,7 @@ class _DownloadTile extends ConsumerWidget {
         child: Icon(statusIcon, color: statusColor, size: 20),
       ),
       title: Text(
-        task.episodeId,
+        _displayTitle(task),
         style: theme.textTheme.titleSmall,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -236,6 +236,18 @@ class _DownloadTile extends ConsumerWidget {
         DownloadStatus.paused => Icons.pause_circle_rounded,
         _ => Icons.schedule_rounded,
       };
+
+  /// Build a human-readable title for the download tile.
+  String _displayTitle(DownloadTasksTableData task) {
+    if (task.animeTitle != null && task.episodeNumber != null) {
+      return '${task.animeTitle} — Ep ${task.episodeNumber}';
+    }
+    if (task.animeTitle != null) return task.animeTitle!;
+    // Fallback: strip the extension prefix from the composite episodeId
+    final id = task.episodeId;
+    final colonIdx = id.indexOf(':');
+    return colonIdx != -1 ? id.substring(colonIdx + 1) : id;
+  }
 
   String _formatBytes(int bytes) {
     if (bytes < 1024) return '${bytes}B';

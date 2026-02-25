@@ -124,8 +124,11 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/anime/:extensionId/:animeId',
       builder: (context, state) {
-        final extensionId = state.pathParameters['extensionId']!;
-        final animeId = state.pathParameters['animeId']!;
+        // Decode in case the caller URL-encoded the IDs (e.g. IDs with slashes).
+        final extensionId =
+            Uri.decodeComponent(state.pathParameters['extensionId']!);
+        final animeId =
+            Uri.decodeComponent(state.pathParameters['animeId']!);
         return AnimeDetailScreen(
           extensionId: extensionId,
           animeId: animeId,

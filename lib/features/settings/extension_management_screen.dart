@@ -9,6 +9,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
 import '../../data/providers/extension_providers.dart';
 import '../../extensions/models/extension_manifest.dart';
@@ -23,10 +24,13 @@ class ExtensionManagementScreen extends ConsumerStatefulWidget {
 
 class _ExtensionManagementScreenState
     extends ConsumerState<ExtensionManagementScreen> {
-  final _repoUrlController = TextEditingController();
+  final _repoUrlController = TextEditingController(
+    text: AppConstants.defaultExtensionRepoUrl,
+  );
   bool _isFetchingRepo = false;
   List<ExtensionRepoEntry>? _availableExtensions;
   String? _repoError;
+  bool _autoFetched = false;
 
   @override
   void dispose() {
@@ -107,6 +111,12 @@ class _ExtensionManagementScreenState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final extState = ref.watch(extensionNotifierProvider);
+
+    // Auto-fetch the default repo on first build if no extensions are installed.
+    if (!_autoFetched && extState.loadedExtensions.isEmpty && !_isFetchingRepo) {
+      _autoFetched = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _addRepo());
+    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('Extensions')),

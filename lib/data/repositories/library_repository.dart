@@ -53,6 +53,44 @@ class LibraryRepository {
     await _db.upsertLibraryEntry(animeId: dbAnimeId, status: status);
   }
 
+  /// Auto-add anime to the library only if not already present.
+  ///
+  /// This is called when playback starts and should NEVER overwrite an existing
+  /// entry (including its status). Use [addToLibrary] when the user explicitly
+  /// selects a status via the library sheet.
+  Future<void> autoAddIfAbsent({
+    required String extensionId,
+    required String animeId,
+    required ExtensionAnimeDetail detail,
+  }) async {
+    final dbAnimeId = '$extensionId:$animeId';
+
+    // Always keep the anime metadata up-to-date
+    await _db.upsertAnime(AnimeTableCompanion(
+      id: Value(dbAnimeId),
+      extensionId: Value(extensionId),
+      title: Value(detail.title),
+      coverUrl: Value(detail.coverUrl),
+      bannerUrl: Value(detail.bannerUrl),
+      synopsis: Value(detail.synopsis),
+      status: Value(detail.status),
+      genres: Value(
+        detail.genres.isNotEmpty ? jsonEncode(detail.genres) : null,
+      ),
+      episodeCount: Value(
+        detail.episodes.isNotEmpty ? detail.episodes.length : null,
+      ),
+      updatedAt: Value(DateTime.now().millisecondsSinceEpoch ~/ 1000),
+    ));
+
+    // Only insert the library entry if it doesn't already exist.
+    // This preserves any existing status (e.g. 'completed') set by the user.
+    await _db.insertLibraryIfAbsent(
+      animeId: dbAnimeId,
+      status: 'watching',
+    );
+  }
+
   // ── Progress ──────────────────────────────────────────────────────
 
   /// Update the watched-episode counter, but only if [newProgress] is higher

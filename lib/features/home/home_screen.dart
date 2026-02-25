@@ -9,21 +9,21 @@ library;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
 import '../../data/database/app_database.dart';
 import '../../data/database/database_provider.dart';
-import '../../features/anime/anime_detail_screen.dart';
 
 // ── Providers ────────────────────────────────────────────────────────────────
 
 final _continueWatchingProvider = StreamProvider<List<LibraryItem>>((ref) {
-  return ref.read(databaseProvider).watchContinueWatching(limit: 15);
+  return ref.watch(databaseProvider).watchContinueWatching(limit: 15);
 });
 
 final _recentLibraryProvider = StreamProvider<List<LibraryItem>>((ref) {
-  return ref.read(databaseProvider).watchLibrary();
+  return ref.watch(databaseProvider).watchLibrary();
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -158,12 +158,9 @@ class _ContinueCard extends StatelessWidget {
       child: GestureDetector(
         onTap: () {
           if (extensionId.isNotEmpty) {
-            Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => AnimeDetailScreen(
-                extensionId: extensionId,
-                animeId: animeId,
-              ),
-            ));
+            context.push(
+              '/anime/${Uri.encodeComponent(extensionId)}/${Uri.encodeComponent(animeId)}',
+            );
           }
         },
         child: SizedBox(
@@ -314,12 +311,9 @@ class _RecentListTile extends StatelessWidget {
           : null,
       onTap: () {
         if (extensionId.isNotEmpty) {
-          Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => AnimeDetailScreen(
-              extensionId: extensionId,
-              animeId: animeId,
-            ),
-          ));
+          context.push(
+            '/anime/${Uri.encodeComponent(extensionId)}/${Uri.encodeComponent(animeId)}',
+          );
         }
       },
     );

@@ -30,14 +30,52 @@ NijiStream is an open-source, cross-platform anime streaming and management app 
 # Get dependencies
 flutter pub get
 
-# Generate database code
-dart run build_runner build
+# Generate database code (required after any changes to database tables)
+dart run build_runner build --delete-conflicting-outputs
 
 # Run on Windows
 flutter run -d windows
 
 # Build APK
 flutter build apk --release
+
+# Run on Linux
+flutter run -d linux
+```
+
+### Linux system dependencies
+
+The following packages are required on Debian/Ubuntu-based systems before building or running on Linux:
+
+```bash
+sudo apt-get install -y \
+  libmpv-dev \          # media_kit video backend
+  mpv \                 # runtime MPV libraries
+  libsqlite3-dev \      # SQLite (drift database)
+  libsecret-1-dev \     # flutter_secure_storage (OAuth tokens)
+  libjsoncpp-dev \      # flutter_js / QuickJS dependency
+  pkg-config \
+  cmake \
+  ninja-build \
+  clang \
+  libgtk-3-dev \
+  libblkid-dev \
+  liblzma-dev
+```
+
+On Fedora/RHEL:
+
+```bash
+sudo dnf install -y \
+  mpv-libs-devel \
+  sqlite-devel \
+  libsecret-devel \
+  jsoncpp-devel \
+  pkg-config \
+  cmake \
+  ninja-build \
+  clang \
+  gtk3-devel
 ```
 
 ## Legal Disclaimer

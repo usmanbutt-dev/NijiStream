@@ -150,25 +150,31 @@ class ExtensionRepository {
     }
   }
 
-  /// Load all .js files from the extensions directory.
+  /// Load all .js files from the extensions directory in parallel.
+  ///
+  /// Uses [Future.wait] so N extensions load concurrently rather than
+  /// sequentially. A failure in one extension does not affect others.
   Future<List<ExtensionManifest>> loadAllExtensions() async {
     _ensureInit();
-    final manifests = <ExtensionManifest>[];
 
     final files = _extensionsDir
         .listSync()
         .whereType<File>()
-        .where((f) => f.path.endsWith('.js'));
+        .where((f) => f.path.endsWith('.js'))
+        .toList();
 
-    for (final file in files) {
+    final futures = files.map((file) async {
       final extensionId = p.basenameWithoutExtension(file.path);
-      final manifest = await loadExtension(extensionId, file.path);
-      if (manifest != null) {
-        manifests.add(manifest);
+      try {
+        return await loadExtension(extensionId, file.path);
+      } catch (e) {
+        debugPrint('Failed to load extension $extensionId: $e');
+        return null;
       }
-    }
+    });
 
-    return manifests;
+    final results = await Future.wait(futures, eagerError: false);
+    return results.whereType<ExtensionManifest>().toList();
   }
 
   // ═══════════════════════════════════════════════════════════════════

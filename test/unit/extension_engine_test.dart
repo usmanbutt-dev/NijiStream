@@ -50,7 +50,7 @@ void main() {
       final result = bridge.querySelectorAll(html, '.item');
       final elements = jsonDecode(result) as List;
       expect(elements.length, equals(3));
-      expect(elements[0]['text'], equals('First'));
+      expect((elements[0] as Map<String, dynamic>)['text'], equals('First'));
     });
 
     test('querySelector returns first match', () {

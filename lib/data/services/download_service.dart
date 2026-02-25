@@ -9,6 +9,8 @@
 /// ref.read(downloadServiceProvider).enqueue(
 ///   episodeId: 'ext:ep-url',
 ///   url: 'https://cdn.example.com/ep1.mp4',
+///   animeTitle: 'One Piece',
+///   episodeNumber: 1,
 /// );
 /// ```
 library;
@@ -30,7 +32,7 @@ import '../database/database_provider.dart';
 
 final downloadServiceProvider = Provider<DownloadService>((ref) {
   final service = DownloadService(ref.read(databaseProvider));
-  ref.onDispose(() => service.dispose());
+  ref.onDispose(service.dispose);
   return service;
 });
 
@@ -55,12 +57,21 @@ class DownloadService {
 
   /// Add an episode to the download queue.
   ///
-  /// If the episode is already queued/downloading, this is a no-op.
-  Future<void> enqueue({
+  /// Returns false (without enqueuing) if the URL points to an HLS manifest
+  /// (.m3u8), which requires ffmpeg and is not yet supported.
+  /// If the episode is already queued/downloading, this is a no-op (returns true).
+  Future<bool> enqueue({
     required String episodeId,
     required String url,
     Map<String, String>? headers,
+    String? animeTitle,
+    int? episodeNumber,
   }) async {
+    // HLS (.m3u8) downloads require ffmpeg — not supported yet.
+    if (_isHlsUrl(url)) {
+      return false;
+    }
+
     // Check for existing task
     final existing = await (_db.select(_db.downloadTasksTable)
           ..where((t) => t.episodeId.equals(episodeId)))
@@ -69,7 +80,7 @@ class DownloadService {
     if (existing != null &&
         existing.status != DownloadStatus.failed &&
         existing.status != DownloadStatus.completed) {
-      return; // already queued or in progress
+      return true; // already queued or in progress
     }
 
     final dir = await _downloadDir();
@@ -92,6 +103,8 @@ class DownloadService {
       await _db.into(_db.downloadTasksTable).insert(
             DownloadTasksTableCompanion(
               episodeId: Value(episodeId),
+              animeTitle: Value(animeTitle),
+              episodeNumber: Value(episodeNumber),
               url: Value(url),
               filePath: Value(filePath),
               status: const Value(DownloadStatus.queued),
@@ -100,6 +113,14 @@ class DownloadService {
     }
 
     _processQueue();
+    return true;
+  }
+
+  /// Returns true if [url] is an HLS manifest that cannot be downloaded
+  /// directly with Dio.
+  bool _isHlsUrl(String url) {
+    final lower = url.toLowerCase();
+    return lower.contains('.m3u8') || lower.contains('application/x-mpegurl');
   }
 
   /// Pause a running download.
@@ -177,9 +198,9 @@ class DownloadService {
 
       await (_db.update(_db.downloadTasksTable)
             ..where((t) => t.id.equals(task.id)))
-          .write(DownloadTasksTableCompanion(
-        status: const Value(DownloadStatus.completed),
-        progress: const Value(1.0),
+          .write(const DownloadTasksTableCompanion(
+        status: Value(DownloadStatus.completed),
+        progress: Value(1.0),
       ));
     } on DioException catch (e) {
       if (CancelToken.isCancel(e)) {

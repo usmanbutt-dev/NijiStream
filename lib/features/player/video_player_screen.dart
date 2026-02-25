@@ -19,10 +19,12 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../core/theme/colors.dart';
+import '../../core/utils/error_utils.dart';
 import '../../data/repositories/library_repository.dart';
 import '../../data/services/watch_progress_service.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
+import '../settings/settings_screen.dart';
 
 class VideoPlayerScreen extends ConsumerStatefulWidget {
   final String extensionId;
@@ -59,7 +61,7 @@ class VideoPlayerScreen extends ConsumerStatefulWidget {
 class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
   late final Player _player;
   late final VideoController _videoController;
-  final _progressService = WatchProgressService();
+  late final WatchProgressService _progressService;
 
   ExtensionVideoResponse? _videoResponse;
   ExtensionVideoSource? _selectedSource;
@@ -88,6 +90,9 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
     // Create the media_kit player and controller.
     _player = Player();
     _videoController = VideoController(_player);
+
+    // Obtain the DB-backed progress service.
+    _progressService = ref.read(watchProgressServiceProvider);
 
     // Listen to player state streams.
     _subscriptions.addAll([
@@ -178,14 +183,24 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
               ? saved.positionMs
               : null;
 
-      _selectSource(response.sources.first, resumePositionMs: resumeMs);
+      // Apply user's preferred quality setting.
+      final preferredQuality =
+          ref.read(playerSettingsProvider).defaultQuality;
+      final selectedSource = (preferredQuality != 'auto')
+          ? response.sources.firstWhere(
+              (s) => s.quality.toLowerCase().contains(preferredQuality.toLowerCase()),
+              orElse: () => response.sources.first,
+            )
+          : response.sources.first;
+
+      _selectSource(selectedSource, resumePositionMs: resumeMs);
 
       // Auto-register in library as "watching" if not already added.
       _autoAddToLibrary();
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Failed to load video: $e';
+          _error = userFriendlyError(e);
           _isLoading = false;
         });
       }
@@ -194,25 +209,16 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
 
   /// Auto-add this anime to the library with status "watching" when playback
   /// starts, but only if it isn't already in the library.
+  /// Preserves any existing user-set status (e.g. 'completed').
   Future<void> _autoAddToLibrary() async {
     final detail = widget.animeDetail;
     if (detail == null) return;
     try {
-      final libraryRepo = ref.read(libraryRepositoryProvider);
-      final existing = await libraryRepo
-          .watchEntry(
+      await ref.read(libraryRepositoryProvider).autoAddIfAbsent(
             extensionId: widget.extensionId,
             animeId: widget.animeId,
-          )
-          .first;
-      if (existing == null) {
-        await libraryRepo.addToLibrary(
-          extensionId: widget.extensionId,
-          animeId: widget.animeId,
-          detail: detail,
-          status: 'watching',
-        );
-      }
+            detail: detail,
+          );
     } catch (_) {}
   }
 

@@ -44,26 +44,6 @@ class AnimeTable extends Table {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// TABLE: episodes
-// ═══════════════════════════════════════════════════════════════════════
-class EpisodesTable extends Table {
-  @override
-  String get tableName => 'episodes';
-
-  /// Composite key: `{anime_id}:ep:{number}`
-  TextColumn get id => text()();
-  TextColumn get animeId => text().references(AnimeTable, #id)();
-  IntColumn get number => integer()();
-  TextColumn get title => text().nullable()();
-  TextColumn get sourceUrl => text().withDefault(const Constant(''))();
-  /// Unix timestamp (seconds)
-  IntColumn get airedAt => integer().nullable()();
-
-  @override
-  Set<Column> get primaryKey => {id};
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 // TABLE: user_library
 // ═══════════════════════════════════════════════════════════════════════
 class UserLibraryTable extends Table {
@@ -83,14 +63,18 @@ class UserLibraryTable extends Table {
 
 // ═══════════════════════════════════════════════════════════════════════
 // TABLE: watch_progress
-// Tracks playback position for resume functionality.
+// Tracks per-episode playback position for resume functionality.
+// No FK constraints — episode IDs are soft references to extension runtime objects.
 // ═══════════════════════════════════════════════════════════════════════
 class WatchProgressTable extends Table {
   @override
   String get tableName => 'watch_progress';
 
   IntColumn get id => integer().autoIncrement()();
-  TextColumn get episodeId => text().references(EpisodesTable, #id)();
+  /// Composite key: `{extensionId}:{animeId}`
+  TextColumn get animeId => text()();
+  /// Extension episode ID (e.g. `/watch/one-piece/1`)
+  TextColumn get episodeId => text()();
   IntColumn get positionMs => integer().withDefault(const Constant(0))();
   IntColumn get durationMs => integer().withDefault(const Constant(0))();
   /// 0 = not completed, 1 = completed
@@ -106,7 +90,12 @@ class DownloadTasksTable extends Table {
   String get tableName => 'download_tasks';
 
   IntColumn get id => integer().autoIncrement()();
-  TextColumn get episodeId => text().references(EpisodesTable, #id)();
+  /// Composite episode key: `{extensionId}:{episodeId}` — plain text, no FK.
+  TextColumn get episodeId => text()();
+  /// Human-readable anime title for display in the downloads screen.
+  TextColumn get animeTitle => text().nullable()();
+  /// Episode number for display in the downloads screen.
+  IntColumn get episodeNumber => integer().nullable()();
   TextColumn get url => text()();
   TextColumn get filePath => text().withDefault(const Constant(''))();
   /// queued, downloading, paused, completed, failed
@@ -119,7 +108,7 @@ class DownloadTasksTable extends Table {
 
 // ═══════════════════════════════════════════════════════════════════════
 // TABLE: tracking_accounts
-// Stores OAuth tokens for AniList, MAL, Kitsu.
+// Stores OAuth account metadata (tokens live in FlutterSecureStorage).
 // ═══════════════════════════════════════════════════════════════════════
 class TrackingAccountsTable extends Table {
   @override
@@ -129,6 +118,8 @@ class TrackingAccountsTable extends Table {
   TextColumn get id => text()();
   TextColumn get service => text()();
   TextColumn get username => text().nullable()();
+  /// Tokens are intentionally nullable — sensitive tokens are stored in
+  /// FlutterSecureStorage, not here.
   TextColumn get accessToken => text().nullable()();
   TextColumn get refreshToken => text().nullable()();
   IntColumn get tokenExpiresAt => integer().nullable()();

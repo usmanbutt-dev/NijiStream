@@ -11,6 +11,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 
 import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
+import '../../core/utils/error_utils.dart';
 import '../../data/database/app_database.dart';
 import '../../data/repositories/library_repository.dart';
 import '../../extensions/api/extension_api.dart';
@@ -61,7 +62,7 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = userFriendlyError(e);
           _isLoading = false;
         });
       }
@@ -260,6 +261,7 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
                   return _EpisodeTile(
                     episode: episode,
                     extensionId: widget.extensionId,
+                    animeTitle: detail.title,
                     theme: theme,
                     onTap: () {
                       Navigator.of(context).push(
@@ -296,7 +298,7 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
 
 final _libraryEntryProvider = StreamProvider.family<UserLibraryTableData?,
     ({String extensionId, String animeId})>((ref, args) {
-  return ref.read(libraryRepositoryProvider).watchEntry(
+  return ref.watch(libraryRepositoryProvider).watchEntry(
         extensionId: args.extensionId,
         animeId: args.animeId,
       );
@@ -649,12 +651,14 @@ class _GenresSection extends StatelessWidget {
 class _EpisodeTile extends ConsumerStatefulWidget {
   final ExtensionEpisode episode;
   final String extensionId;
+  final String animeTitle;
   final ThemeData theme;
   final VoidCallback onTap;
 
   const _EpisodeTile({
     required this.episode,
     required this.extensionId,
+    required this.animeTitle,
     required this.theme,
     required this.onTap,
   });
@@ -692,26 +696,42 @@ class _EpisodeTileState extends ConsumerState<_EpisodeTile> {
       }
 
       final source = response.sources.first;
-      await ref.read(downloadServiceProvider).enqueue(
+      final enqueued = await ref.read(downloadServiceProvider).enqueue(
             episodeId: '${widget.extensionId}:${widget.episode.id}',
             url: source.url,
             headers: source.headers,
+            animeTitle: widget.animeTitle,
+            episodeNumber: widget.episode.number,
           );
 
-      if (mounted) {
+      if (!mounted) return;
+
+      if (!enqueued) {
+        // HLS stream — not supported for download yet
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Added to download queue'),
+            content: Text(
+              'HLS downloads are not yet supported. This feature is coming in a future update.',
+            ),
             behavior: SnackBarBehavior.floating,
-            duration: Duration(seconds: 2),
+            duration: Duration(seconds: 4),
           ),
         );
+        return;
       }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Added to download queue'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Download failed: $e'),
+            content: Text(userFriendlyError(e)),
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 3),
           ),

@@ -51,6 +51,10 @@ class AppConstants {
   /// Search debounce duration in milliseconds.
   static const int searchDebounceMs = 500;
 
+  /// Default extension repository URL (official NijiStream extensions).
+  static const String defaultExtensionRepoUrl =
+      'https://raw.githubusercontent.com/usmanbutt-dev/nijistream-extensions/master/index.json';
+
   /// Legal disclaimer shown to users.
   static const String disclaimer =
       'NijiStream does not provide, host, or distribute any media content. '

@@ -26,8 +26,12 @@ import 'package:html/dom.dart' as html_dom;
 ///
 /// Each extension runtime gets its own [BridgeFunctions] instance
 /// with its own [Dio] client (allowing per-extension cookies / headers).
+///
+/// Call [cancelAll] when the owning runtime is being torn down to abort any
+/// in-flight requests and avoid callbacks arriving after the JS context is gone.
 class BridgeFunctions {
   final Dio _dio;
+  final CancelToken _cancelToken = CancelToken();
 
   BridgeFunctions({Dio? dio})
       : _dio = dio ??
@@ -41,6 +45,13 @@ class BridgeFunctions {
               },
             ));
 
+  /// Cancel all in-flight requests. Call when the extension is unloaded.
+  void cancelAll() {
+    if (!_cancelToken.isCancelled) {
+      _cancelToken.cancel('Extension unloaded');
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════════
   // http.get(url, headers?) → string
   // ═══════════════════════════════════════════════════════════════════
@@ -50,6 +61,7 @@ class BridgeFunctions {
     try {
       final response = await _dio.get<String>(
         url,
+        cancelToken: _cancelToken,
         options: Options(
           headers: headers,
           responseType: ResponseType.plain,
@@ -57,6 +69,7 @@ class BridgeFunctions {
       );
       return response.data ?? '';
     } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) return '{"error": "cancelled"}';
       return '{"error": "${e.message}"}';
     }
   }
@@ -75,6 +88,7 @@ class BridgeFunctions {
       final response = await _dio.post<String>(
         url,
         data: body,
+        cancelToken: _cancelToken,
         options: Options(
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
@@ -85,6 +99,7 @@ class BridgeFunctions {
       );
       return response.data ?? '';
     } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) return '{"error": "cancelled"}';
       return '{"error": "${e.message}"}';
     }
   }
@@ -125,7 +140,7 @@ class BridgeFunctions {
     final document = html_parser.parse(htmlString);
     final elements = document.querySelectorAll(selector);
     return jsonEncode(
-      elements.map((e) => _elementToJson(e)).toList(),
+      elements.map(_elementToJson).toList(),
     );
   }
 
