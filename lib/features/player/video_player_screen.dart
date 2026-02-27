@@ -20,6 +20,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../core/theme/colors.dart';
 import '../../core/utils/error_utils.dart';
+import '../../core/utils/hls_utils.dart';
 import '../../data/repositories/library_repository.dart';
 import '../../data/services/watch_progress_service.dart';
 import '../../extensions/api/extension_api.dart';
@@ -65,6 +66,7 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
 
   ExtensionVideoResponse? _videoResponse;
   ExtensionVideoSource? _selectedSource;
+  ExtensionSubtitle? _selectedSubtitle;
   bool _isLoading = true;
   String? _error;
   bool _controlsVisible = true;
@@ -149,16 +151,21 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
 
     try {
       final repo = ref.read(extensionRepositoryProvider);
-      final response = await repo.getVideoSources(
+      final rawResponse = await repo.getVideoSources(
         widget.extensionId,
         widget.episodeId,
       );
 
       if (!mounted) return;
 
-      if (response == null || response.sources.isEmpty) {
+      if (rawResponse == null || rawResponse.sources.isEmpty) {
+        // Direct-scraping extensions may be blocked by the site's anti-bot
+        // protection (e.g. Cloudflare JS challenges). Give a more helpful hint.
+        final isDirect = widget.extensionId.contains('direct');
         setState(() {
-          _error = 'No video sources available for this episode.';
+          _error = isDirect
+              ? 'No video sources found.\n\nThis extension scrapes the site directly and may be blocked by anti-bot protection. Try again later or use a different source.'
+              : 'No video sources available for this episode.';
           _isLoading = false;
         });
         return;
@@ -169,6 +176,12 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
         widget.extensionId,
         widget.episodeId,
       );
+
+      if (!mounted) return;
+
+      // If there's a single HLS source (master M3U8), parse it to extract
+      // individual quality variants so the user can manually select quality.
+      final response = await expandHlsVariants(rawResponse);
 
       if (!mounted) return;
 
@@ -238,17 +251,16 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
     );
     _player.open(media);
 
-    // Load external subtitle tracks if available.
-    if (_videoResponse != null && _videoResponse!.subtitles.isNotEmpty) {
-      for (final sub in _videoResponse!.subtitles) {
-        _player.setSubtitleTrack(
-          SubtitleTrack.uri(
-            sub.url,
-            title: sub.label,
-            language: sub.lang,
-          ),
-        );
-      }
+    // Auto-select the first English subtitle, or first available.
+    final subs = _videoResponse?.subtitles ?? [];
+    if (subs.isNotEmpty) {
+      final english = subs.where(
+        (s) => s.lang.toLowerCase().contains('english'),
+      );
+      final autoSub = english.isNotEmpty ? english.first : subs.first;
+      _setSubtitle(autoSub);
+    } else {
+      setState(() => _selectedSubtitle = null);
     }
 
     // Start periodic progress saving.
@@ -258,6 +270,18 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
     });
 
     _resetHideTimer();
+  }
+
+  void _setSubtitle(ExtensionSubtitle sub) {
+    setState(() => _selectedSubtitle = sub);
+    _player.setSubtitleTrack(
+      SubtitleTrack.uri(sub.url, title: sub.label, language: sub.lang),
+    );
+  }
+
+  void _disableSubtitles() {
+    setState(() => _selectedSubtitle = null);
+    _player.setSubtitleTrack(SubtitleTrack.no());
   }
 
   void _saveProgress() {
@@ -431,7 +455,7 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
 
               const Spacer(),
 
-              // ── Bottom bar: seek bar + quality selector ──
+              // ── Bottom bar: seek bar + quality + subtitles ──
               _BottomBar(
                 position: _position,
                 duration: _duration,
@@ -448,6 +472,10 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
                 sources: _videoResponse?.sources ?? [],
                 onSourceSelected: (source) =>
                     _selectSource(source, resumePositionMs: null),
+                selectedSubtitle: _selectedSubtitle,
+                subtitles: _videoResponse?.subtitles ?? [],
+                onSubtitleSelected: _setSubtitle,
+                onSubtitlesOff: _disableSubtitles,
               ),
             ],
           ),
@@ -682,6 +710,10 @@ class _BottomBar extends StatelessWidget {
   final ExtensionVideoSource? selectedSource;
   final List<ExtensionVideoSource> sources;
   final ValueChanged<ExtensionVideoSource> onSourceSelected;
+  final ExtensionSubtitle? selectedSubtitle;
+  final List<ExtensionSubtitle> subtitles;
+  final ValueChanged<ExtensionSubtitle> onSubtitleSelected;
+  final VoidCallback onSubtitlesOff;
 
   const _BottomBar({
     required this.position,
@@ -691,6 +723,10 @@ class _BottomBar extends StatelessWidget {
     required this.selectedSource,
     required this.sources,
     required this.onSourceSelected,
+    required this.selectedSubtitle,
+    required this.subtitles,
+    required this.onSubtitleSelected,
+    required this.onSubtitlesOff,
   });
 
   @override
@@ -740,18 +776,126 @@ class _BottomBar extends StatelessWidget {
 
                 const Spacer(),
 
-                // Quality selector
-                if (sources.length > 1)
-                  _QualityButton(
-                    selectedSource: selectedSource,
-                    sources: sources,
-                    onSourceSelected: onSourceSelected,
+                // Subtitle selector
+                if (subtitles.isNotEmpty)
+                  _SubtitleButton(
+                    selectedSubtitle: selectedSubtitle,
+                    subtitles: subtitles,
+                    onSubtitleSelected: onSubtitleSelected,
+                    onSubtitlesOff: onSubtitlesOff,
                   ),
+
+                // Quality selector (always visible)
+                _QualityButton(
+                  selectedSource: selectedSource,
+                  sources: sources,
+                  onSourceSelected: onSourceSelected,
+                ),
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Subtitle Selector Button
+// ═══════════════════════════════════════════════════════════════════
+
+class _SubtitleButton extends StatelessWidget {
+  final ExtensionSubtitle? selectedSubtitle;
+  final List<ExtensionSubtitle> subtitles;
+  final ValueChanged<ExtensionSubtitle> onSubtitleSelected;
+  final VoidCallback onSubtitlesOff;
+
+  const _SubtitleButton({
+    required this.selectedSubtitle,
+    required this.subtitles,
+    required this.onSubtitleSelected,
+    required this.onSubtitlesOff,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextButton.icon(
+      style: TextButton.styleFrom(
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+      ),
+      icon: Icon(
+        selectedSubtitle != null
+            ? Icons.closed_caption_rounded
+            : Icons.closed_caption_off_rounded,
+        size: 18,
+      ),
+      label: Text(
+        selectedSubtitle?.lang ?? 'CC',
+        style: const TextStyle(fontSize: 12),
+      ),
+      onPressed: () => _showSubtitleSheet(context),
+    );
+  }
+
+  void _showSubtitleSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: NijiColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Subtitles',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              // "Off" option
+              ListTile(
+                leading: Icon(
+                  selectedSubtitle == null
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_off_rounded,
+                  color: selectedSubtitle == null ? NijiColors.primary : null,
+                ),
+                title: const Text('Off'),
+                onTap: () {
+                  Navigator.pop(context);
+                  onSubtitlesOff();
+                },
+              ),
+              // Each subtitle track
+              ...subtitles.map(
+                (sub) => ListTile(
+                  leading: Icon(
+                    sub == selectedSubtitle
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_off_rounded,
+                    color: sub == selectedSubtitle ? NijiColors.primary : null,
+                  ),
+                  title: Text(sub.lang),
+                  onTap: () {
+                    Navigator.pop(context);
+                    onSubtitleSelected(sub);
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 }

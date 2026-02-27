@@ -12,12 +12,14 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
 import '../../core/utils/error_utils.dart';
+import '../../core/utils/hls_utils.dart';
 import '../../data/database/app_database.dart';
+import '../../data/database/database_provider.dart';
 import '../../data/repositories/library_repository.dart';
+import '../../data/services/download_service.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
 import '../player/video_player_screen.dart';
-import '../../data/services/download_service.dart';
 
 class AnimeDetailScreen extends ConsumerStatefulWidget {
   final String extensionId;
@@ -258,12 +260,31 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
               delegate: SliverChildBuilderDelegate(
                 (context, index) {
                   final episode = detail.episodes[index];
+                  final metadataOnly = _isMetadataOnlyEpisodeId(episode.id);
                   return _EpisodeTile(
                     episode: episode,
                     extensionId: widget.extensionId,
                     animeTitle: detail.title,
+                    coverUrl: detail.coverUrl,
                     theme: theme,
+                    isMetadataOnly: metadataOnly,
                     onTap: () {
+                      // Metadata-only extensions produce stub episode IDs
+                      // (e.g. "mal:21:ep:1", "anilist:12345:ep:1") that have
+                      // no real stream. Show a snackbar instead of opening the
+                      // player, which would just show "No video sources".
+                      if (_isMetadataOnlyEpisodeId(episode.id)) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'This source is metadata-only — no video stream available.',
+                            ),
+                            behavior: SnackBarBehavior.floating,
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
+                        return;
+                      }
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => VideoPlayerScreen(
@@ -293,6 +314,22 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
     );
   }
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+/// Returns true if the episode ID is a synthetic stub from a metadata-only
+/// extension (e.g. "mal:21:ep:1" from Jikan, "anilist:12345:ep:1" from AniList).
+/// These episodes have no real video stream and should not open the player.
+bool _isMetadataOnlyEpisodeId(String id) {
+  return id.startsWith('mal:') || id.startsWith('anilist:');
+}
+
+// ── Download task provider (scoped per episode) ──────────────────────────
+
+final _downloadTaskProvider =
+    StreamProvider.family<DownloadTasksTableData?, String>((ref, episodeId) {
+  return ref.watch(databaseProvider).watchDownloadTaskByEpisodeId(episodeId);
+});
 
 // ── Library entry provider (scoped per anime) ─────────────────────────────
 
@@ -631,11 +668,19 @@ class _GenresSection extends StatelessWidget {
         runSpacing: 6,
         children: genres
             .map(
-              (genre) => Chip(
-                label: Text(genre),
-                labelStyle: theme.textTheme.labelSmall,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
+              (genre) => Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: theme.chipTheme.backgroundColor,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  genre,
+                  style: theme.textTheme.labelSmall,
+                ),
               ),
             )
             .toList(),
@@ -652,15 +697,19 @@ class _EpisodeTile extends ConsumerStatefulWidget {
   final ExtensionEpisode episode;
   final String extensionId;
   final String animeTitle;
+  final String? coverUrl;
   final ThemeData theme;
   final VoidCallback onTap;
+  final bool isMetadataOnly;
 
   const _EpisodeTile({
     required this.episode,
     required this.extensionId,
     required this.animeTitle,
+    this.coverUrl,
     required this.theme,
     required this.onTap,
+    required this.isMetadataOnly,
   });
 
   @override
@@ -670,6 +719,9 @@ class _EpisodeTile extends ConsumerStatefulWidget {
 class _EpisodeTileState extends ConsumerState<_EpisodeTile> {
   bool _enqueuing = false;
 
+  String get _compositeEpisodeId =>
+      '${widget.extensionId}:${widget.episode.id}';
+
   Future<void> _download() async {
     if (_enqueuing) return;
     setState(() => _enqueuing = true);
@@ -677,14 +729,14 @@ class _EpisodeTileState extends ConsumerState<_EpisodeTile> {
     try {
       // Resolve the actual stream URL via the extension before downloading.
       final repo = ref.read(extensionRepositoryProvider);
-      final response = await repo.getVideoSources(
+      final rawResponse = await repo.getVideoSources(
         widget.extensionId,
         widget.episode.id,
       );
 
       if (!mounted) return;
 
-      if (response == null || response.sources.isEmpty) {
+      if (rawResponse == null || rawResponse.sources.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('No downloadable source found'),
@@ -695,36 +747,48 @@ class _EpisodeTileState extends ConsumerState<_EpisodeTile> {
         return;
       }
 
-      final source = response.sources.first;
-      final enqueued = await ref.read(downloadServiceProvider).enqueue(
-            episodeId: '${widget.extensionId}:${widget.episode.id}',
+      // Expand HLS master playlist into quality variants.
+      final response = await expandHlsVariants(rawResponse);
+      if (!mounted) return;
+
+      // If multiple sources, let user pick quality; otherwise download directly.
+      ExtensionVideoSource source;
+      if (response.sources.length > 1) {
+        final picked = await _showDownloadQualityPicker(response.sources);
+        if (picked == null || !mounted) return; // user cancelled
+        source = picked;
+      } else {
+        source = response.sources.first;
+      }
+
+      final error = await ref.read(downloadServiceProvider).enqueue(
+            episodeId: _compositeEpisodeId,
             url: source.url,
             headers: source.headers,
             animeTitle: widget.animeTitle,
             episodeNumber: widget.episode.number,
+            coverUrl: widget.coverUrl,
+            subtitles: response.subtitles,
           );
 
       if (!mounted) return;
 
-      if (!enqueued) {
-        // HLS stream — not supported for download yet
+      if (error != null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'HLS downloads are not yet supported. This feature is coming in a future update.',
-            ),
+          SnackBar(
+            content: Text(error),
             behavior: SnackBarBehavior.floating,
-            duration: Duration(seconds: 4),
+            duration: const Duration(seconds: 4),
           ),
         );
         return;
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Added to download queue'),
+        SnackBar(
+          content: Text('Downloading ${source.quality}...'),
           behavior: SnackBarBehavior.floating,
-          duration: Duration(seconds: 2),
+          duration: const Duration(seconds: 2),
         ),
       );
     } catch (e) {
@@ -742,8 +806,64 @@ class _EpisodeTileState extends ConsumerState<_EpisodeTile> {
     }
   }
 
+  /// Shows a bottom sheet letting the user pick download quality.
+  /// Returns the selected source, or null if cancelled.
+  Future<ExtensionVideoSource?> _showDownloadQualityPicker(
+    List<ExtensionVideoSource> sources,
+  ) async {
+    return showModalBottomSheet<ExtensionVideoSource>(
+      context: context,
+      backgroundColor: NijiColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Download Quality',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+              ...sources.map(
+                (source) => ListTile(
+                  leading: Icon(
+                    source.quality == 'auto'
+                        ? Icons.auto_awesome_rounded
+                        : Icons.hd_rounded,
+                    color: NijiColors.textSecondary,
+                  ),
+                  title: Text(
+                    source.quality == 'auto'
+                        ? 'Auto (best quality)'
+                        : source.quality,
+                  ),
+                  onTap: () => Navigator.pop(ctx, source),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Watch download state for this episode.
+    final dlAsync = ref.watch(_downloadTaskProvider(_compositeEpisodeId));
+    final dlTask = dlAsync.valueOrNull;
+    final dlStatus = dlTask?.status;
+
     return ListTile(
       leading: Container(
         width: 40,
@@ -768,29 +888,79 @@ class _EpisodeTileState extends ConsumerState<_EpisodeTile> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Download button — resolves stream URL then enqueues
-          _enqueuing
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : IconButton(
-                  icon: const Icon(Icons.download_outlined, size: 20),
-                  color: widget.theme.colorScheme.primary.withValues(alpha: 0.7),
-                  tooltip: 'Download',
-                  onPressed: _download,
-                ),
-          Icon(
-            Icons.play_circle_outline_rounded,
-            color: widget.theme.colorScheme.primary.withValues(alpha: 0.7),
-          ),
-        ],
+      trailing: SizedBox(
+        width: widget.isMetadataOnly ? 32 : 72,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Download button — hidden for metadata-only episodes
+            if (!widget.isMetadataOnly) _buildDownloadIcon(dlStatus),
+            Icon(
+              widget.isMetadataOnly
+                  ? Icons.info_outline_rounded
+                  : Icons.play_circle_outline_rounded,
+              size: 22,
+              color: widget.isMetadataOnly
+                  ? NijiColors.textTertiary
+                  : widget.theme.colorScheme.primary.withValues(alpha: 0.7),
+            ),
+          ],
+        ),
       ),
       onTap: widget.onTap,
     );
+  }
+
+  Widget _buildDownloadIcon(String? dlStatus) {
+    if (_enqueuing) {
+      return const SizedBox(
+        width: 20,
+        height: 20,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+
+    return switch (dlStatus) {
+      DownloadStatus.completed => const Icon(
+          Icons.download_done_rounded,
+          size: 20,
+          color: NijiColors.success,
+        ),
+      DownloadStatus.downloading => SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            value: null,
+            color: widget.theme.colorScheme.primary.withValues(alpha: 0.7),
+          ),
+        ),
+      DownloadStatus.queued => Icon(
+          Icons.schedule_rounded,
+          size: 20,
+          color: widget.theme.colorScheme.primary.withValues(alpha: 0.5),
+        ),
+      DownloadStatus.paused => const Icon(
+          Icons.pause_circle_outline_rounded,
+          size: 20,
+          color: NijiColors.warning,
+        ),
+      DownloadStatus.failed => IconButton(
+          icon: const Icon(Icons.error_outline_rounded, size: 20),
+          color: NijiColors.error,
+          tooltip: 'Download failed — tap to retry',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          onPressed: _download,
+        ),
+      _ => IconButton(
+          icon: const Icon(Icons.download_outlined, size: 20),
+          color: widget.theme.colorScheme.primary.withValues(alpha: 0.7),
+          tooltip: 'Download',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+          onPressed: _download,
+        ),
+    };
   }
 }

@@ -13,20 +13,22 @@ class NijiTheme {
   NijiTheme._();
 
   /// The default dark theme.
-  static ThemeData dark({Color? accentSeed}) {
+  static ThemeData dark({Color? accentSeed, bool amoled = false}) {
     final colorScheme = NijiColors.darkScheme(seed: accentSeed);
     final textTheme = NijiTypography.textTheme(Brightness.dark);
+    final bg = amoled ? NijiColors.amoledBackground : NijiColors.background;
+    final sf = amoled ? NijiColors.amoledSurface : NijiColors.surface;
 
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
-      colorScheme: colorScheme,
+      colorScheme: colorScheme.copyWith(surface: sf),
       textTheme: textTheme,
-      scaffoldBackgroundColor: NijiColors.background,
+      scaffoldBackgroundColor: bg,
 
       // ── AppBar ──
       appBarTheme: AppBarTheme(
-        backgroundColor: NijiColors.background,
+        backgroundColor: bg,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
@@ -35,7 +37,7 @@ class NijiTheme {
 
       // ── Bottom Navigation ──
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
-        backgroundColor: NijiColors.surface,
+        backgroundColor: sf,
         selectedItemColor: colorScheme.primary,
         unselectedItemColor: NijiColors.textTertiary,
         type: BottomNavigationBarType.fixed,
@@ -46,7 +48,7 @@ class NijiTheme {
 
       // ── NavigationRail (desktop sidebar) ──
       navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: NijiColors.surface,
+        backgroundColor: sf,
         selectedIconTheme: IconThemeData(color: colorScheme.primary),
         unselectedIconTheme: const IconThemeData(color: NijiColors.textTertiary),
         indicatorColor: colorScheme.primary.withValues(alpha: 0.15),
@@ -61,7 +63,7 @@ class NijiTheme {
 
       // ── Cards ──
       cardTheme: CardThemeData(
-        color: NijiColors.surface,
+        color: sf,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         shape: RoundedRectangleBorder(

@@ -70,6 +70,15 @@ class TrackingAccountState {
     this.error,
   });
 
+  /// Whether the AniList client ID is a real value (not placeholder).
+  bool get anilistConfigured =>
+      _anilistClientId != 'YOUR_ANILIST_CLIENT_ID' &&
+      _anilistClientId.isNotEmpty;
+
+  /// Whether the MAL client ID is a real value (not placeholder).
+  bool get malConfigured =>
+      _malClientId != 'YOUR_MAL_CLIENT_ID' && _malClientId.isNotEmpty;
+
   TrackingAccountState copyWith({
     bool? anilistConnected,
     String? anilistUsername,

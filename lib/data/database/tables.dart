@@ -96,6 +96,8 @@ class DownloadTasksTable extends Table {
   TextColumn get animeTitle => text().nullable()();
   /// Episode number for display in the downloads screen.
   IntColumn get episodeNumber => integer().nullable()();
+  /// Anime cover image URL for the downloads grid.
+  TextColumn get coverUrl => text().nullable()();
   TextColumn get url => text()();
   TextColumn get filePath => text().withDefault(const Constant(''))();
   /// queued, downloading, paused, completed, failed

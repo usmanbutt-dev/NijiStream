@@ -4,6 +4,11 @@
 /// Each download task is persisted in the drift database so it survives
 /// app restarts. The worker runs up to [maxConcurrent] downloads in parallel.
 ///
+/// HLS (.m3u8) streams are handled by a pure Dart downloader that parses
+/// the manifest and concatenates .ts segments — no ffmpeg required.
+/// If ffmpeg is available on the system, it is used as a fallback for
+/// better container format (.mp4 output).
+///
 /// Usage:
 /// ```dart
 /// ref.read(downloadServiceProvider).enqueue(
@@ -24,14 +29,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:flutter/foundation.dart';
+
 import '../../core/constants.dart';
+import '../../extensions/models/extension_manifest.dart';
 import '../database/app_database.dart';
 import '../database/database_provider.dart';
+import 'ffmpeg_service.dart';
+import 'hls_downloader.dart';
 
 // ── Provider ───────────────────────────────────────────────────────────────
 
 final downloadServiceProvider = Provider<DownloadService>((ref) {
-  final service = DownloadService(ref.read(databaseProvider));
+  final service = DownloadService(
+    ref.read(databaseProvider),
+    ref.read(ffmpegServiceProvider),
+  );
   ref.onDispose(service.dispose);
   return service;
 });
@@ -40,11 +53,14 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
 
 class DownloadService {
   final AppDatabase _db;
+  final FfmpegService _ffmpeg;
   final _dio = Dio();
   final _activeTokens = <int, CancelToken>{};
+  final _taskHeaders = <int, Map<String, String>>{};
+  final _taskSubtitles = <int, List<ExtensionSubtitle>>{};
   int _runningCount = 0;
 
-  DownloadService(this._db);
+  DownloadService(this._db, this._ffmpeg);
 
   void dispose() {
     for (final token in _activeTokens.values) {
@@ -57,21 +73,17 @@ class DownloadService {
 
   /// Add an episode to the download queue.
   ///
-  /// Returns false (without enqueuing) if the URL points to an HLS manifest
-  /// (.m3u8), which requires ffmpeg and is not yet supported.
-  /// If the episode is already queued/downloading, this is a no-op (returns true).
-  Future<bool> enqueue({
+  /// Returns `null` on success, or a user-friendly error string on failure.
+  /// If the episode is already queued/downloading, this is a no-op (returns null).
+  Future<String?> enqueue({
     required String episodeId,
     required String url,
     Map<String, String>? headers,
     String? animeTitle,
     int? episodeNumber,
+    String? coverUrl,
+    List<ExtensionSubtitle>? subtitles,
   }) async {
-    // HLS (.m3u8) downloads require ffmpeg — not supported yet.
-    if (_isHlsUrl(url)) {
-      return false;
-    }
-
     // Check for existing task
     final existing = await (_db.select(_db.downloadTasksTable)
           ..where((t) => t.episodeId.equals(episodeId)))
@@ -80,31 +92,35 @@ class DownloadService {
     if (existing != null &&
         existing.status != DownloadStatus.failed &&
         existing.status != DownloadStatus.completed) {
-      return true; // already queued or in progress
+      return null; // already queued or in progress
     }
 
     final dir = await _downloadDir();
     final fileName = _safeFilename(episodeId, url);
     final filePath = p.join(dir.path, fileName);
 
+    int taskId;
     if (existing != null) {
+      taskId = existing.id;
       // Re-queue a previously failed/completed task
       await (_db.update(_db.downloadTasksTable)
             ..where((t) => t.id.equals(existing.id)))
           .write(DownloadTasksTableCompanion(
         url: Value(url),
         filePath: Value(filePath),
+        coverUrl: Value(coverUrl),
         status: const Value(DownloadStatus.queued),
         progress: const Value(0.0),
         downloadedBytes: const Value(0),
         totalBytes: const Value(0),
       ));
     } else {
-      await _db.into(_db.downloadTasksTable).insert(
+      taskId = await _db.into(_db.downloadTasksTable).insert(
             DownloadTasksTableCompanion(
               episodeId: Value(episodeId),
               animeTitle: Value(animeTitle),
               episodeNumber: Value(episodeNumber),
+              coverUrl: Value(coverUrl),
               url: Value(url),
               filePath: Value(filePath),
               status: const Value(DownloadStatus.queued),
@@ -112,12 +128,21 @@ class DownloadService {
           );
     }
 
+    // Store headers in-memory for HLS tasks that need them.
+    if (headers != null && headers.isNotEmpty) {
+      _taskHeaders[taskId] = headers;
+    }
+
+    // Store subtitles in-memory for downloading after the video completes.
+    if (subtitles != null && subtitles.isNotEmpty) {
+      _taskSubtitles[taskId] = subtitles;
+    }
+
     _processQueue();
-    return true;
+    return null; // success
   }
 
-  /// Returns true if [url] is an HLS manifest that cannot be downloaded
-  /// directly with Dio.
+  /// Returns true if [url] is an HLS manifest.
   bool _isHlsUrl(String url) {
     final lower = url.toLowerCase();
     return lower.contains('.m3u8') || lower.contains('application/x-mpegurl');
@@ -127,6 +152,7 @@ class DownloadService {
   Future<void> pause(int taskId) async {
     _activeTokens[taskId]?.cancel('Paused by user');
     _activeTokens.remove(taskId);
+    _ffmpeg.killTask(taskId);
     await _setStatus(taskId, DownloadStatus.paused);
   }
 
@@ -145,6 +171,7 @@ class DownloadService {
   Future<void> cancel(int taskId) async {
     _activeTokens[taskId]?.cancel('Cancelled by user');
     _activeTokens.remove(taskId);
+    _ffmpeg.killTask(taskId);
     final task = await (_db.select(_db.downloadTasksTable)
           ..where((t) => t.id.equals(taskId)))
         .getSingleOrNull();
@@ -169,10 +196,15 @@ class DownloadService {
 
     for (final task in queued) {
       _runningCount++;
-      unawaited(_downloadTask(task));
+      if (_isHlsUrl(task.url)) {
+        unawaited(_downloadHlsTask(task));
+      } else {
+        unawaited(_downloadTask(task));
+      }
     }
   }
 
+  /// Direct file download (MP4, etc.).
   Future<void> _downloadTask(DownloadTasksTableData task) async {
     final cancelToken = CancelToken();
     _activeTokens[task.id] = cancelToken;
@@ -196,6 +228,9 @@ class DownloadService {
         },
       );
 
+      // Download subtitles alongside the video.
+      await _downloadSubtitles(task.id, file.path);
+
       await (_db.update(_db.downloadTasksTable)
             ..where((t) => t.id.equals(task.id)))
           .write(const DownloadTasksTableCompanion(
@@ -213,8 +248,138 @@ class DownloadService {
     } finally {
       _activeTokens.remove(task.id);
       _runningCount = (_runningCount - 1).clamp(0, 99);
-      // Keep draining the queue
       _processQueue();
+    }
+  }
+
+  /// HLS download — pure Dart (primary) with ffmpeg fallback.
+  Future<void> _downloadHlsTask(DownloadTasksTableData task) async {
+    final cancelToken = CancelToken();
+    _activeTokens[task.id] = cancelToken;
+
+    await _setStatus(task.id, DownloadStatus.downloading);
+
+    try {
+      final dir = await _downloadDir();
+      final safe = task.episodeId.replaceAll(RegExp(r'[^\w]'), '_');
+      final baseName = safe.substring(0, safe.length.clamp(0, 80));
+      final headers = _taskHeaders.remove(task.id);
+
+      // Pure Dart HLS downloader first — handles headers reliably.
+      final dartOutputPath = p.join(dir.path, '$baseName.ts');
+
+      final dartSuccess = await downloadHlsStream(
+        m3u8Url: task.url,
+        outputPath: dartOutputPath,
+        dio: _dio,
+        headers: headers,
+        cancelToken: cancelToken,
+        onProgress: (downloaded, total) {
+          _updateProgress(task.id, downloaded, total);
+        },
+      );
+
+      if (dartSuccess) {
+        await _downloadSubtitles(task.id, dartOutputPath);
+        await (_db.update(_db.downloadTasksTable)
+              ..where((t) => t.id.equals(task.id)))
+            .write(DownloadTasksTableCompanion(
+          filePath: Value(dartOutputPath),
+          status: const Value(DownloadStatus.completed),
+          progress: const Value(1.0),
+        ));
+        return;
+      }
+
+      if (cancelToken.isCancelled) return; // paused or cancelled
+
+      // Dart downloader failed — try ffmpeg as fallback (better for
+      // encrypted streams or edge cases, produces proper .mp4).
+      if (await _ffmpeg.isAvailable()) {
+        final ffmpegOutputPath = p.join(dir.path, '$baseName.mp4');
+        final ffmpegSuccess = await _ffmpeg.downloadHls(
+          m3u8Url: task.url,
+          outputPath: ffmpegOutputPath,
+          headers: headers,
+          taskId: task.id,
+        );
+
+        if (ffmpegSuccess) {
+          // Clean up partial .ts file from Dart attempt.
+          final partial = File(dartOutputPath);
+          if (await partial.exists()) await partial.delete();
+
+          await _downloadSubtitles(task.id, ffmpegOutputPath);
+          await (_db.update(_db.downloadTasksTable)
+                ..where((t) => t.id.equals(task.id)))
+              .write(DownloadTasksTableCompanion(
+            filePath: Value(ffmpegOutputPath),
+            status: const Value(DownloadStatus.completed),
+            progress: const Value(1.0),
+          ));
+          return;
+        }
+      }
+
+      await _setStatus(task.id, DownloadStatus.failed);
+    } on DioException catch (e) {
+      if (!CancelToken.isCancel(e)) {
+        await _setStatus(task.id, DownloadStatus.failed);
+      }
+    } catch (_) {
+      await _setStatus(task.id, DownloadStatus.failed);
+    } finally {
+      _activeTokens.remove(task.id);
+      _runningCount = (_runningCount - 1).clamp(0, 99);
+      _processQueue();
+    }
+  }
+
+  // ── Subtitle download ──────────────────────────────────────────
+
+  /// Downloads VTT/SRT subtitle files alongside a completed video.
+  ///
+  /// Files are saved next to the video with a naming convention:
+  /// `{baseName}.{lang}.vtt` — the offline player scans for these.
+  Future<void> _downloadSubtitles(int taskId, String videoFilePath) async {
+    final subtitles = _taskSubtitles.remove(taskId);
+    if (subtitles == null || subtitles.isEmpty) return;
+
+    final videoFile = File(videoFilePath);
+    final dir = videoFile.parent.path;
+    // Strip extension from video filename to get base name.
+    final baseName = p.basenameWithoutExtension(videoFilePath);
+
+    final usedNames = <String>{};
+    for (final sub in subtitles) {
+      try {
+        // Sanitize language label for filename.
+        var safeLang = sub.lang
+            .replaceAll(RegExp(r'[^\w\s-]'), '')
+            .replaceAll(RegExp(r'\s+'), '_')
+            .toLowerCase();
+        final ext = sub.type == 'srt' ? 'srt' : 'vtt';
+
+        // Deduplicate: if two subs share the same lang (e.g. two "Spanish"
+        // variants), append an index to avoid overwriting.
+        final key = '$safeLang.$ext';
+        if (usedNames.contains(key)) {
+          var i = 2;
+          while (usedNames.contains('${safeLang}_$i.$ext')) {
+            i++;
+          }
+          safeLang = '${safeLang}_$i';
+        }
+        usedNames.add('$safeLang.$ext');
+
+        final subPath = p.join(dir, '$baseName.$safeLang.$ext');
+
+        await _dio.download(sub.url, subPath);
+        debugPrint('[DL] Subtitle downloaded: $subPath');
+      } catch (e) {
+        // Non-fatal — video still plays without subtitles.
+        debugPrint('[DL] Subtitle download failed (${sub.lang}): $e');
+      }
     }
   }
 
@@ -246,7 +411,7 @@ class DownloadService {
 
   /// Build a safe filename from the episode id and URL.
   String _safeFilename(String episodeId, String url) {
-    final ext = p.extension(Uri.parse(url).path);
+    final ext = _isHlsUrl(url) ? '.ts' : p.extension(Uri.parse(url).path);
     final safe = episodeId.replaceAll(RegExp(r'[^\w]'), '_');
     return '${safe.substring(0, safe.length.clamp(0, 80))}${ext.isEmpty ? '.mp4' : ext}';
   }

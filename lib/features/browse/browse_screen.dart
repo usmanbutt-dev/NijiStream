@@ -28,7 +28,6 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
   bool _popularLoaded = false;
-  int _lastExtensionCount = 0;
 
   @override
   void dispose() {
@@ -55,13 +54,23 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
     final extensionState = ref.watch(extensionNotifierProvider);
     final searchState = ref.watch(searchNotifierProvider);
 
-    // Reset _popularLoaded whenever the extension count changes so that
-    // installing or removing an extension refreshes the popular grid.
-    final currentCount = extensionState.loadedExtensions.length;
-    if (currentCount != _lastExtensionCount) {
-      _lastExtensionCount = currentCount;
-      _popularLoaded = false;
-    }
+    // Re-fetch popular whenever the set of loaded extensions changes
+    // (install, uninstall, or first load). This also fires correctly when
+    // returning to this tab after an extension change.
+    ref.listen<List<String>>(
+      extensionNotifierProvider.select(
+        (s) => s.loadedExtensions.map((e) => e.id).toList(),
+      ),
+      (previous, next) {
+        // Only react when the list actually changed (not on first listen).
+        if (previous == null) return;
+        final prevSet = previous.toSet();
+        final nextSet = next.toSet();
+        if (prevSet != nextSet) {
+          _popularLoaded = false;
+        }
+      },
+    );
 
     // Once extensions finish loading, auto-fetch popular content.
     if (!extensionState.isLoading &&
@@ -71,7 +80,7 @@ class _BrowseScreenState extends ConsumerState<BrowseScreen> {
         searchState.query.isEmpty) {
       _popularLoaded = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        ref.read(searchNotifierProvider.notifier).loadPopular();
+        if (mounted) ref.read(searchNotifierProvider.notifier).loadPopular();
       });
     }
 

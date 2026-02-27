@@ -47,6 +47,66 @@ class PlayerSettingsNotifier extends StateNotifier<PlayerSettings> {
   }
 }
 
+// ── Theme settings provider ──────────────────────────────────────────────────
+
+const _kAccentColor = 'theme_accent_color';
+const _kAmoledMode = 'theme_amoled_mode';
+
+/// Predefined accent color presets.
+const _accentPresets = <String, Color>{
+  'Purple': NijiColors.primary,
+  'Blue': Color(0xFF3B82F6),
+  'Teal': Color(0xFF14B8A6),
+  'Green': Color(0xFF22C55E),
+  'Pink': Color(0xFFEC4899),
+  'Orange': Color(0xFFF97316),
+  'Red': Color(0xFFEF4444),
+  'Yellow': Color(0xFFEAB308),
+};
+
+class ThemeSettings {
+  final Color? accentColor;
+  final bool amoledMode;
+  const ThemeSettings({this.accentColor, this.amoledMode = false});
+}
+
+final themeSettingsProvider =
+    StateNotifierProvider<ThemeSettingsNotifier, ThemeSettings>((ref) {
+  return ThemeSettingsNotifier();
+});
+
+class ThemeSettingsNotifier extends StateNotifier<ThemeSettings> {
+  ThemeSettingsNotifier() : super(const ThemeSettings()) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final colorValue = prefs.getInt(_kAccentColor);
+    final amoled = prefs.getBool(_kAmoledMode) ?? false;
+    state = ThemeSettings(
+      accentColor: colorValue != null ? Color(colorValue) : null,
+      amoledMode: amoled,
+    );
+  }
+
+  Future<void> setAccentColor(Color? color) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (color != null) {
+      await prefs.setInt(_kAccentColor, color.toARGB32());
+    } else {
+      await prefs.remove(_kAccentColor);
+    }
+    state = ThemeSettings(accentColor: color, amoledMode: state.amoledMode);
+  }
+
+  Future<void> setAmoledMode(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kAmoledMode, enabled);
+    state = ThemeSettings(accentColor: state.accentColor, amoledMode: enabled);
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Settings Screen
 // ═══════════════════════════════════════════════════════════════════
@@ -69,7 +129,7 @@ class SettingsScreen extends ConsumerWidget {
           _SettingsTile(
             icon: Icons.sync_rounded,
             title: 'Tracking Accounts',
-            subtitle: 'Connect AniList, MAL, Kitsu',
+            subtitle: 'Connect AniList, MyAnimeList',
             trailing: const Icon(
               Icons.chevron_right_rounded,
               color: NijiColors.textTertiary,
@@ -127,14 +187,12 @@ class SettingsScreen extends ConsumerWidget {
           _SettingsTile(
             icon: Icons.palette_rounded,
             title: 'Theme',
-            subtitle: 'Dark mode (more options coming soon)',
+            subtitle: _accentLabel(ref.watch(themeSettingsProvider)),
             trailing: const Icon(
               Icons.chevron_right_rounded,
               color: NijiColors.textTertiary,
             ),
-            onTap: () {
-              // TODO: Navigate to appearance settings
-            },
+            onTap: () => _showThemeDialog(context, ref),
           ),
           const Divider(),
 
@@ -142,15 +200,13 @@ class SettingsScreen extends ConsumerWidget {
           _SectionHeader(title: 'Downloads', theme: theme),
           _SettingsTile(
             icon: Icons.folder_rounded,
-            title: 'Download Settings',
-            subtitle: 'Storage path, concurrent downloads',
+            title: 'Concurrent Downloads',
+            subtitle: '${AppConstants.defaultConcurrentDownloads} simultaneous downloads',
             trailing: const Icon(
               Icons.chevron_right_rounded,
               color: NijiColors.textTertiary,
             ),
-            onTap: () {
-              // TODO: Navigate to download settings
-            },
+            onTap: () => _showDownloadSettingsDialog(context),
           ),
           const Divider(),
 
@@ -175,6 +231,155 @@ class SettingsScreen extends ConsumerWidget {
               color: NijiColors.textTertiary,
             ),
             onTap: () => _showDisclaimerDialog(context, theme),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _accentLabel(ThemeSettings ts) {
+    if (ts.accentColor == null) return 'Purple (default)';
+    for (final entry in _accentPresets.entries) {
+      if (entry.value.toARGB32() == ts.accentColor!.toARGB32()) {
+        return entry.key;
+      }
+    }
+    return 'Custom';
+  }
+
+  void _showThemeDialog(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(themeSettingsProvider.notifier);
+    final current = ref.read(themeSettingsProvider);
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          backgroundColor: NijiColors.surface,
+          title: const Text('Theme'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Accent Color',
+                style: Theme.of(ctx).textTheme.labelMedium?.copyWith(
+                      color: NijiColors.textSecondary,
+                    ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: _accentPresets.entries.map((entry) {
+                  final isSelected = current.accentColor == null
+                      ? entry.value == NijiColors.primary
+                      : entry.value.toARGB32() ==
+                          current.accentColor!.toARGB32();
+                  return GestureDetector(
+                    onTap: () {
+                      notifier.setAccentColor(
+                        entry.value == NijiColors.primary
+                            ? null
+                            : entry.value,
+                      );
+                      Navigator.pop(ctx);
+                    },
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: entry.value,
+                        shape: BoxShape.circle,
+                        border: isSelected
+                            ? Border.all(color: Colors.white, width: 2.5)
+                            : null,
+                      ),
+                      child: isSelected
+                          ? const Icon(Icons.check, color: Colors.white, size: 18)
+                          : null,
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 20),
+              StatefulBuilder(
+                builder: (ctx, setLocalState) {
+                  var amoled = ref.read(themeSettingsProvider).amoledMode;
+                  return SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('AMOLED Black'),
+                    subtitle: Text(
+                      'Pure black background for OLED screens',
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                            color: NijiColors.textTertiary,
+                          ),
+                    ),
+                    value: amoled,
+                    onChanged: (v) {
+                      notifier.setAmoledMode(v);
+                      setLocalState(() => amoled = v);
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showDownloadSettingsDialog(BuildContext context) {
+    final theme = Theme.of(context);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: NijiColors.surface,
+        title: const Text('Download Settings'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.speed_rounded,
+                  color: NijiColors.textSecondary),
+              title: const Text('Concurrent Downloads'),
+              subtitle: Text(
+                '${AppConstants.defaultConcurrentDownloads} simultaneous',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: NijiColors.textTertiary,
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: NijiColors.surfaceVariant,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'Downloads are saved to app documents folder under NijiStream/downloads/.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: NijiColors.textSecondary,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
           ),
         ],
       ),

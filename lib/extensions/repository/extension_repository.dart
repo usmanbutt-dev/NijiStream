@@ -154,8 +154,17 @@ class ExtensionRepository {
   ///
   /// Uses [Future.wait] so N extensions load concurrently rather than
   /// sequentially. A failure in one extension does not affect others.
+  ///
+  /// In debug mode, also checks for a local dev extensions directory and
+  /// syncs any newer files to the installed directory. This lets developers
+  /// iterate on extension JS without reinstalling via the UI.
   Future<List<ExtensionManifest>> loadAllExtensions() async {
     _ensureInit();
+
+    // In debug mode, auto-sync from local dev repo if available.
+    if (kDebugMode) {
+      await _syncDevExtensions();
+    }
 
     final files = _extensionsDir
         .listSync()
@@ -175,6 +184,48 @@ class ExtensionRepository {
 
     final results = await Future.wait(futures, eagerError: false);
     return results.whereType<ExtensionManifest>().toList();
+  }
+
+  /// Dev-only: sync extensions from local repo if it exists.
+  /// Looks for a `nijistream-extensions/extensions/` sibling directory
+  /// relative to the project root and copies any .js files that are
+  /// newer than the installed copy.
+  Future<void> _syncDevExtensions() async {
+    try {
+      // Check common relative paths for the extensions repo.
+      // Works on any machine as long as the repos are siblings.
+      const devPaths = [
+        '../nijistream-extensions/extensions',
+      ];
+
+      for (final devPath in devPaths) {
+        final devDir = Directory(devPath);
+        if (!await devDir.exists()) continue;
+
+        final devFiles = devDir
+            .listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.js'));
+
+        for (final devFile in devFiles) {
+          final name = p.basename(devFile.path);
+          final installedFile = File(p.join(_extensionsDir.path, name));
+
+          // Copy if not installed or if dev version is newer.
+          final devMod = await devFile.lastModified();
+          final shouldCopy = !await installedFile.exists() ||
+              devMod.isAfter(await installedFile.lastModified());
+
+          if (shouldCopy) {
+            await devFile.copy(installedFile.path);
+            debugPrint('Dev sync: copied $name to extensions dir');
+          }
+        }
+        break; // only use the first found dev path
+      }
+    } catch (e) {
+      debugPrint('Dev extension sync failed (non-fatal): $e');
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════

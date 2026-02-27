@@ -50,7 +50,7 @@ class AppDatabase extends _$AppDatabase {
   /// Bump this when you change the schema. drift will run the
   /// [migration] strategy to update existing databases.
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration {
@@ -78,6 +78,10 @@ class AppDatabase extends _$AppDatabase {
           // Create updated tables with corrected schema.
           await m.createTable(watchProgressTable);
           await m.createTable(downloadTasksTable);
+        }
+        if (from < 3) {
+          // Add cover_url column for the downloads grid redesign.
+          await m.addColumn(downloadTasksTable, downloadTasksTable.coverUrl);
         }
       },
     );
@@ -285,6 +289,14 @@ class AppDatabase extends _$AppDatabase {
     return (select(downloadTasksTable)
           ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
         .watch();
+  }
+
+  /// Watch a single download task by composite episode ID.
+  Stream<DownloadTasksTableData?> watchDownloadTaskByEpisodeId(
+      String episodeId) {
+    return (select(downloadTasksTable)
+          ..where((t) => t.episodeId.equals(episodeId)))
+        .watchSingleOrNull();
   }
 
   /// Remove a download task by id.

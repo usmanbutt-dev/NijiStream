@@ -31,16 +31,21 @@ class TrackingAccountsScreen extends ConsumerWidget {
           _ServiceCard(
             logo: _AniListLogo(),
             name: 'AniList',
-            description: 'Sync your watch list and scores to AniList.',
+            description: 'Connect your AniList account.',
             isConnected: tracking.anilistConnected,
             username: tracking.anilistUsername,
             isLoading: tracking.isLoading,
-            onConnect: notifier.connectAnilist,
+            onConnect: tracking.anilistConfigured
+                ? notifier.connectAnilist
+                : null,
             onDisconnect: () => _confirmDisconnect(
               context,
               name: 'AniList',
               onConfirm: notifier.disconnectAnilist,
             ),
+            notConfiguredMessage: !tracking.anilistConfigured
+                ? 'Client ID not configured'
+                : null,
           ),
 
           const Divider(height: 1),
@@ -49,30 +54,21 @@ class TrackingAccountsScreen extends ConsumerWidget {
           _ServiceCard(
             logo: _MALLogo(),
             name: 'MyAnimeList',
-            description: 'Sync your anime list to MyAnimeList.',
+            description: 'Connect your MyAnimeList account.',
             isConnected: tracking.malConnected,
             username: tracking.malUsername,
             isLoading: tracking.isLoading,
-            onConnect: notifier.connectMal,
+            onConnect: tracking.malConfigured
+                ? notifier.connectMal
+                : null,
             onDisconnect: () => _confirmDisconnect(
               context,
               name: 'MyAnimeList',
               onConfirm: notifier.disconnectMal,
             ),
-          ),
-
-          const Divider(height: 1),
-
-          // ── Kitsu (placeholder) ──
-          _ServiceCard(
-            logo: _KitsuLogo(),
-            name: 'Kitsu',
-            description: 'Kitsu integration coming soon.',
-            isConnected: false,
-            username: null,
-            isLoading: false,
-            onConnect: null, // disabled
-            onDisconnect: null,
+            notConfiguredMessage: !tracking.malConfigured
+                ? 'Client ID not configured'
+                : null,
           ),
 
           const SizedBox(height: 24),
@@ -87,9 +83,9 @@ class TrackingAccountsScreen extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Text(
-                'NijiStream uses OAuth to connect to tracking services. '
-                'No password is ever stored — only access tokens which you can '
-                'revoke at any time from the respective service\'s settings.',
+                'Tracking integration requires valid OAuth client IDs. '
+                'Once configured, NijiStream uses OAuth — no password is ever '
+                'stored, only access tokens which you can revoke at any time.',
                 style: TextStyle(
                   color: NijiColors.textSecondary,
                   fontSize: 12,
@@ -151,6 +147,7 @@ class _ServiceCard extends StatelessWidget {
   final bool isLoading;
   final VoidCallback? onConnect;
   final VoidCallback? onDisconnect;
+  final String? notConfiguredMessage;
 
   const _ServiceCard({
     required this.logo,
@@ -161,6 +158,7 @@ class _ServiceCard extends StatelessWidget {
     required this.isLoading,
     required this.onConnect,
     required this.onDisconnect,
+    this.notConfiguredMessage,
   });
 
   @override
@@ -192,9 +190,16 @@ class _ServiceCard extends StatelessWidget {
                         color: NijiColors.success,
                       ),
                     )
+                  else if (notConfiguredMessage != null)
+                    Text(
+                      notConfiguredMessage!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: NijiColors.textTertiary,
+                      ),
+                    )
                   else
                     Text(
-                      disabled ? 'Coming soon' : description,
+                      description,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: NijiColors.textSecondary,
                       ),
@@ -283,28 +288,6 @@ class _MALLogo extends StatelessWidget {
             color: Colors.white,
             fontWeight: FontWeight.w900,
             fontSize: 14,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _KitsuLogo extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFFF6500),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: const Center(
-        child: Text(
-          'K',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w900,
-            fontSize: 22,
           ),
         ),
       ),

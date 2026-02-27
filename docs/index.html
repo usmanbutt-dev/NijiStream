@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NijiStream — Your anime, everywhere.</title>
+  <meta name="description" content="Open-source, cross-platform anime streaming app built with Flutter. Browse, watch, track, and download anime on Android, Windows, and Linux.">
+  <meta name="theme-color" content="#A855F7">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="NijiStream">
+  <meta property="og:description" content="Your anime, everywhere. Open-source cross-platform anime streaming app.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://usmanbutt-dev.github.io/NijiStream/">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --primary: #A855F7;
+      --primary-light: #C084FC;
+      --primary-dark: #7C3AED;
+      --bg: #0F0F14;
+      --surface: #1A1A24;
+      --surface-variant: #24243A;
+      --text-primary: #F0F0F5;
+      --text-secondary: #A0A0B0;
+      --text-tertiary: #707080;
+      --success: #22C55E;
+      --info: #3B82F6;
+      --warning: #FBBF24;
+      --error: #EF4444;
+      --divider: #2A2A3A;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    a { color: var(--primary-light); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 1rem 2rem;
+      backdrop-filter: blur(20px);
+      background: rgba(15, 15, 20, 0.8);
+      border-bottom: 1px solid var(--divider);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-brand {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .nav-brand span { color: var(--primary); }
+
+    .nav-links {
+      display: flex;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--text-primary); text-decoration: none; }
+
+    /* ── Hero ── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 6rem 2rem 4rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -40%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-content { position: relative; max-width: 700px; }
+
+    .hero-badge {
+      display: inline-block;
+      padding: 0.35rem 1rem;
+      border-radius: 100px;
+      background: rgba(168, 85, 247, 0.12);
+      color: var(--primary-light);
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      border: 1px solid rgba(168, 85, 247, 0.2);
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4rem);
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 1.25rem;
+      letter-spacing: -0.02em;
+    }
+
+    .hero h1 .gradient {
+      background: linear-gradient(135deg, var(--primary-light), var(--primary), var(--info));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 1.15rem;
+      color: var(--text-secondary);
+      max-width: 520px;
+      margin: 0 auto 2.5rem;
+      line-height: 1.7;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.75rem;
+      border-radius: 12px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      transition: all 0.2s;
+      border: none;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-light);
+      text-decoration: none;
+      transform: translateY(-1px);
+      box-shadow: 0 8px 24px rgba(168, 85, 247, 0.3);
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: var(--text-primary);
+      border: 1px solid var(--divider);
+    }
+
+    .btn-outline:hover {
+      border-color: var(--primary);
+      color: var(--primary-light);
+      text-decoration: none;
+    }
+
+    .btn svg {
+      width: 18px;
+      height: 18px;
+      fill: currentColor;
+    }
+
+    /* ── Features ── */
+    .features {
+      padding: 6rem 2rem;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      text-align: center;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 0.75rem;
+    }
+
+    .section-title {
+      text-align: center;
+      font-size: clamp(1.75rem, 4vw, 2.5rem);
+      font-weight: 800;
+      margin-bottom: 3.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--divider);
+      border-radius: 16px;
+      padding: 2rem;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .feature-card:hover {
+      border-color: rgba(168, 85, 247, 0.3);
+      transform: translateY(-2px);
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .feature-card p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      line-height: 1.6;
+    }
+
+    /* ── Tech Stack ── */
+    .tech {
+      padding: 6rem 2rem;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .tech-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+    }
+
+    .tech-item {
+      background: var(--surface);
+      border: 1px solid var(--divider);
+      border-radius: 12px;
+      padding: 1.25rem;
+      text-align: center;
+    }
+
+    .tech-item .label {
+      font-size: 0.7rem;
+      color: var(--text-tertiary);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.4rem;
+    }
+
+    .tech-item .value {
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+
+    /* ── Platforms ── */
+    .platforms {
+      padding: 6rem 2rem;
+      max-width: 800px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .platform-row {
+      display: flex;
+      justify-content: center;
+      gap: 3rem;
+      flex-wrap: wrap;
+      margin-top: 2rem;
+    }
+
+    .platform-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .platform-icon {
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      background: var(--surface);
+      border: 1px solid var(--divider);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.75rem;
+      transition: border-color 0.2s;
+    }
+
+    .platform-icon:hover {
+      border-color: var(--primary);
+    }
+
+    .platform-item .name {
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    .platform-item .status {
+      font-size: 0.75rem;
+      color: var(--success);
+      font-weight: 500;
+    }
+
+    /* ── Getting Started ── */
+    .getting-started {
+      padding: 6rem 2rem;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .code-block {
+      background: var(--surface);
+      border: 1px solid var(--divider);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-top: 1.5rem;
+      overflow-x: auto;
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.85rem;
+      line-height: 1.8;
+      color: var(--text-secondary);
+    }
+
+    .code-block .comment { color: var(--text-tertiary); }
+    .code-block .cmd { color: var(--primary-light); }
+
+    /* ── Footer ── */
+    footer {
+      padding: 3rem 2rem;
+      text-align: center;
+      border-top: 1px solid var(--divider);
+      color: var(--text-tertiary);
+      font-size: 0.85rem;
+    }
+
+    footer a { color: var(--text-secondary); }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 640px) {
+      nav { padding: 0.75rem 1rem; }
+      .nav-links { display: none; }
+      .features-grid { grid-template-columns: 1fr; }
+      .platform-row { gap: 1.5rem; }
+      .hero { padding: 5rem 1.5rem 3rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Nav ── -->
+  <nav>
+    <div class="nav-brand">
+      <span>Niji</span>Stream
+    </div>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#platforms">Platforms</a></li>
+      <li><a href="#tech">Tech Stack</a></li>
+      <li><a href="#build">Build</a></li>
+      <li><a href="https://github.com/usmanbutt-dev/NijiStream">GitHub</a></li>
+    </ul>
+  </nav>
+
+  <!-- ── Hero ── -->
+  <section class="hero">
+    <div class="hero-content">
+      <div class="hero-badge">Open Source &middot; MIT License</div>
+      <h1>Your anime, <span class="gradient">everywhere.</span></h1>
+      <p>
+        Browse, watch, track, and download anime from a single app.
+        Extension-powered, privacy-first, and beautiful on every platform.
+      </p>
+      <div class="hero-buttons">
+        <a href="https://github.com/usmanbutt-dev/NijiStream/releases" class="btn btn-primary">
+          <svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18L5.33 9h3.84v6h3.66V9h3.84L12 2z"/></svg>
+          Download
+        </a>
+        <a href="https://github.com/usmanbutt-dev/NijiStream" class="btn btn-outline">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.164 6.839 9.49.5.09.682-.217.682-.482 0-.237-.009-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836a9.59 9.59 0 012.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.577.688.48C19.138 20.16 22 16.418 22 12c0-5.523-4.477-10-10-10z"/></svg>
+          View Source
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ── -->
+  <section id="features" class="features">
+    <div class="section-label">Features</div>
+    <h2 class="section-title">Everything you need to watch anime</h2>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(168, 85, 247, 0.12); color: #C084FC;">&#x1F50C;</div>
+        <h3>Extension System</h3>
+        <p>Community-driven JavaScript extensions power all content. Install sources from repos, or write your own using the simple JS API.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(59, 130, 246, 0.12); color: #60A5FA;">&#x1F4FA;</div>
+        <h3>Built-in Player</h3>
+        <p>Hardware-accelerated video with libmpv. HLS adaptive streaming, quality selection, subtitle tracks, and resume-from-where-you-left-off.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(34, 197, 94, 0.12); color: #4ADE80;">&#x1F4DA;</div>
+        <h3>Library &amp; Tracking</h3>
+        <p>Organize your collection with status tracking. Sync progress to AniList and MyAnimeList automatically as you watch.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(251, 191, 36, 0.12); color: #FCD34D;">&#x2B07;&#xFE0F;</div>
+        <h3>Offline Downloads</h3>
+        <p>Download episodes in your preferred quality with subtitles. Pure Dart HLS downloader &mdash; no ffmpeg required.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(236, 72, 153, 0.12); color: #F472B6;">&#x1F3A8;</div>
+        <h3>Beautiful Dark UI</h3>
+        <p>Modern Material 3 design with customizable accent colors and AMOLED black mode. Looks great on every screen size.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon" style="background: rgba(239, 68, 68, 0.12); color: #F87171;">&#x1F310;</div>
+        <h3>Cross-Platform</h3>
+        <p>One codebase, three platforms. Runs natively on Android, Windows, and Linux with platform-optimized performance.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Platforms ── -->
+  <section id="platforms" class="platforms">
+    <div class="section-label">Platforms</div>
+    <h2 class="section-title">Runs where you do</h2>
+    <div class="platform-row">
+      <div class="platform-item">
+        <div class="platform-icon">&#x1F4F1;</div>
+        <div class="name">Android</div>
+        <div class="status">Available</div>
+      </div>
+      <div class="platform-item">
+        <div class="platform-icon">&#x1F5A5;&#xFE0F;</div>
+        <div class="name">Windows</div>
+        <div class="status">Available</div>
+      </div>
+      <div class="platform-item">
+        <div class="platform-icon">&#x1F427;</div>
+        <div class="name">Linux</div>
+        <div class="status">Available</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Tech Stack ── -->
+  <section id="tech" class="tech">
+    <div class="section-label">Under the Hood</div>
+    <h2 class="section-title">Built with modern tools</h2>
+    <div class="tech-grid">
+      <div class="tech-item">
+        <div class="label">Framework</div>
+        <div class="value">Flutter 3.x</div>
+      </div>
+      <div class="tech-item">
+        <div class="label">Language</div>
+        <div class="value">Dart</div>
+      </div>
+      <div class="tech-item">
+        <div class="label">State</div>
+        <div class="value">Riverpod</div>
+      </div>
+      <div class="tech-item">
+        <div class="label">Player</div>
+        <div class="value">media_kit / libmpv</div>
+      </div>
+      <div class="tech-item">
+        <div class="label">Database</div>
+        <div class="value">drift (SQLite)</div>
+      </div>
+      <div class="tech-item">
+        <div class="label">Extensions</div>
+        <div class="value">QuickJS</div>
+      </div>
+      <div class="tech-item">
+        <div class="label">Navigation</div>
+        <div class="value">go_router</div>
+      </div>
+      <div class="tech-item">
+        <div class="label">Design</div>
+        <div class="value">Material 3</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Getting Started ── -->
+  <section id="build" class="getting-started">
+    <div class="section-label">Get Started</div>
+    <h2 class="section-title">Build from source</h2>
+    <div class="code-block">
+      <span class="comment"># Clone the repository</span><br>
+      <span class="cmd">git clone</span> https://github.com/usmanbutt-dev/NijiStream.git<br>
+      <span class="cmd">cd</span> NijiStream<br>
+      <br>
+      <span class="comment"># Install dependencies</span><br>
+      <span class="cmd">flutter pub get</span><br>
+      <br>
+      <span class="comment"># Generate database code</span><br>
+      <span class="cmd">dart run build_runner build</span> --delete-conflicting-outputs<br>
+      <br>
+      <span class="comment"># Run on your platform</span><br>
+      <span class="cmd">flutter run</span> -d windows<br>
+      <span class="cmd">flutter run</span> -d linux<br>
+      <span class="cmd">flutter build apk</span> --release
+    </div>
+  </section>
+
+  <!-- ── Footer ── -->
+  <footer>
+    <div class="footer-links">
+      <a href="https://github.com/usmanbutt-dev/NijiStream">Source Code</a>
+      <a href="https://github.com/usmanbutt-dev/NijiStream/releases">Releases</a>
+      <a href="https://github.com/usmanbutt-dev/NijiStream/issues">Issues</a>
+      <a href="https://github.com/usmanbutt-dev/NijiStream/blob/main/LICENSE">MIT License</a>
+    </div>
+    <p>
+      NijiStream does not host or distribute any media content.<br>
+      All content is sourced through third-party community extensions.
+    </p>
+  </footer>
+
+</body>
+</html>
