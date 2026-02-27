@@ -50,3 +50,7 @@ app.*.map.json
 
 # Gemini/Antigravity IDE
 .gemini/
+
+# Secrets / environment
+.env
+*.env

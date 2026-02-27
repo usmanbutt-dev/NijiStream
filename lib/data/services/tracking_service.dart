@@ -2,18 +2,23 @@
 ///
 /// Handles OAuth authentication and API calls for AniList and MAL.
 ///
-/// OAuth flow (both services use browser-based OAuth 2.0):
-/// 1. Open the authorization URL in an external browser via url_launcher.
-/// 2. The browser redirects to `nijistream://oauth?code=...&state=...`
-/// 3. app_links captures that deep-link and we exchange the code for a token.
-/// 4. Token is stored in FlutterSecureStorage (encrypted at rest).
+/// OAuth flow (cross-platform, using localhost callback server):
+/// 1. Start a temporary HTTP server on localhost:13579.
+/// 2. Open the authorization URL in an external browser via url_launcher.
+/// 3. After the user authorizes, the browser redirects to
+///    `http://localhost:13579/callback?code=...` (or with a fragment for AniList).
+/// 4. The local server captures the redirect, extracts the token/code.
+/// 5. Token is stored in FlutterSecureStorage (encrypted at rest).
+///
+/// This approach works on Windows, Android, and Linux — no custom URI
+/// scheme registration or platform-specific deep-link setup needed.
 library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
-import 'package:app_links/app_links.dart';
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
@@ -27,15 +32,30 @@ import '../database/database_provider.dart';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
+/// Fixed port for the local OAuth callback server.
+/// Must match the redirect URI registered in AniList and MAL app settings.
+const _oauthPort = 13579;
+
 /// The redirect URI registered in both AniList and MAL app settings.
-const _redirectUri = 'nijistream://oauth';
+const _redirectUri = 'http://localhost:$_oauthPort/callback';
 
-/// AniList client ID (public — no secret for implicit flow).
-/// Users can override this via Settings, but this default works for testing.
-const _anilistClientId = 'YOUR_ANILIST_CLIENT_ID';
+/// AniList client ID and secret (auth code flow requires both).
+/// Injected at compile time via --dart-define-from-file=.env
+const _anilistClientId = String.fromEnvironment(
+  'ANILIST_CLIENT_ID',
+  defaultValue: '',
+);
+const _anilistClientSecret = String.fromEnvironment(
+  'ANILIST_CLIENT_SECRET',
+  defaultValue: '',
+);
 
-/// MAL client ID. Users must register their own at myanimelist.net/apiconfig.
-const _malClientId = 'YOUR_MAL_CLIENT_ID';
+/// MAL client ID.
+/// Injected at compile time via --dart-define-from-file=.env
+const _malClientId = String.fromEnvironment(
+  'MAL_CLIENT_ID',
+  defaultValue: '',
+);
 
 // ── Secure storage keys ────────────────────────────────────────────────────
 const _kAnilistToken = 'niji_anilist_token';
@@ -46,10 +66,31 @@ const _kMalUsername = 'niji_mal_username';
 
 // Shared FlutterSecureStorage instance — platform defaults:
 //   Android: EncryptedSharedPreferences
-//   iOS/macOS: Keychain
 //   Windows: DPAPI (no extra config)
 //   Linux: libsecret (requires libsecret-1-dev system package)
 const _secureStorage = FlutterSecureStorage();
+
+/// HTML page served after a successful OAuth callback.
+const _successHtml = '''
+<!DOCTYPE html>
+<html>
+<head><title>NijiStream</title>
+<style>
+  body { background: #0F0F14; color: #F0F0F5; font-family: system-ui, sans-serif;
+         display: flex; justify-content: center; align-items: center;
+         height: 100vh; margin: 0; }
+  .box { text-align: center; }
+  h2 { color: #A855F7; margin-bottom: 8px; }
+  p { color: #A0A0B0; }
+</style>
+</head>
+<body><div class="box">
+  <h2>Connected!</h2>
+  <p>You can close this tab and return to NijiStream.</p>
+</div></body>
+</html>
+''';
+
 
 // ── State ──────────────────────────────────────────────────────────────────
 
@@ -70,14 +111,12 @@ class TrackingAccountState {
     this.error,
   });
 
-  /// Whether the AniList client ID is a real value (not placeholder).
+  /// Whether the AniList credentials were provided at compile time.
   bool get anilistConfigured =>
-      _anilistClientId != 'YOUR_ANILIST_CLIENT_ID' &&
-      _anilistClientId.isNotEmpty;
+      _anilistClientId.isNotEmpty && _anilistClientSecret.isNotEmpty;
 
-  /// Whether the MAL client ID is a real value (not placeholder).
-  bool get malConfigured =>
-      _malClientId != 'YOUR_MAL_CLIENT_ID' && _malClientId.isNotEmpty;
+  /// Whether the MAL client ID was provided at compile time.
+  bool get malConfigured => _malClientId.isNotEmpty;
 
   TrackingAccountState copyWith({
     bool? anilistConnected,
@@ -104,19 +143,16 @@ class TrackingAccountState {
 class TrackingNotifier extends StateNotifier<TrackingAccountState> {
   final AppDatabase _db;
   final _dio = Dio();
-  final _appLinks = AppLinks();
 
-  StreamSubscription<Uri>? _linkSub;
-  Completer<Uri?>? _oauthCompleter;
+  HttpServer? _activeServer;
 
   TrackingNotifier(this._db) : super(const TrackingAccountState()) {
     _loadStoredAccounts();
-    _listenForDeepLinks();
   }
 
   @override
   void dispose() {
-    _linkSub?.cancel();
+    _activeServer?.close(force: true);
     super.dispose();
   }
 
@@ -136,37 +172,83 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
     );
   }
 
-  void _listenForDeepLinks() {
-    _linkSub = _appLinks.uriLinkStream.listen((uri) {
-      if (uri.scheme == 'nijistream' && uri.host == 'oauth') {
-        _oauthCompleter?.complete(uri);
-        _oauthCompleter = null;
-      }
-    });
-  }
+  // ── Local OAuth callback server ────────────────────────────────
 
-  /// Wait for a deep-link redirect, timing out after [timeout].
-  Future<Uri?> _waitForRedirect({
+  /// Start a temporary HTTP server on [_oauthPort] that waits for the
+  /// OAuth provider to redirect the browser back with a code or token.
+  ///
+  /// Returns the callback [Uri] containing query parameters, or null
+  /// if the flow timed out or was cancelled.
+  Future<Uri?> _waitForOAuthCallback({
     Duration timeout = const Duration(minutes: 5),
-  }) {
-    _oauthCompleter = Completer<Uri?>();
-    Future.delayed(timeout, () {
-      if (_oauthCompleter != null && !_oauthCompleter!.isCompleted) {
-        _oauthCompleter!.complete(null);
-        _oauthCompleter = null;
-      }
-    });
-    return _oauthCompleter!.future;
+  }) async {
+    // Close any previous server (e.g. from a cancelled flow).
+    await _activeServer?.close(force: true);
+
+    try {
+      final server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        _oauthPort,
+      );
+      _activeServer = server;
+
+      final completer = Completer<Uri?>();
+
+      // Timeout guard.
+      final timer = Timer(timeout, () {
+        if (!completer.isCompleted) {
+          completer.complete(null);
+          server.close(force: true);
+        }
+      });
+
+      server.listen((HttpRequest request) async {
+        // Only handle requests to /callback
+        if (request.uri.path != '/callback') {
+          request.response
+            ..statusCode = 404
+            ..write('Not found');
+          await request.response.close();
+          return;
+        }
+
+        // We have query params (code from AniList or MAL).
+        // Serve the success page and complete.
+        request.response
+          ..statusCode = 200
+          ..headers.contentType = ContentType.html
+          ..write(_successHtml);
+        await request.response.close();
+
+        if (!completer.isCompleted) {
+          completer.complete(request.uri);
+        }
+
+        // Give the browser a moment to render the success page, then
+        // shut down the server.
+        Future.delayed(const Duration(seconds: 1), () {
+          server.close(force: true);
+        });
+      });
+
+      final result = await completer.future;
+      timer.cancel();
+      _activeServer = null;
+      return result;
+    } on SocketException catch (e) {
+      debugPrint('OAuth server bind failed: $e');
+      _activeServer = null;
+      return null;
+    }
   }
 
   // ── AniList OAuth ───────────────────────────────────────────────
 
-  /// AniList uses an implicit OAuth flow (access token returned directly
-  /// in the fragment, not a code exchange).  The redirect URI looks like:
-  ///   nijistream://oauth#access_token=TOKEN&token_type=Bearer&expires_in=N
+  /// AniList uses Authorization Code flow:
+  /// 1. User authorizes in browser → redirected to localhost with ?code=...
+  /// 2. We exchange the code + client_secret for an access token.
   Future<void> connectAnilist() async {
-    // Guard against concurrent OAuth flows
-    if (_oauthCompleter != null && !_oauthCompleter!.isCompleted) {
+    if (_activeServer != null) {
       debugPrint('TrackingService: OAuth flow already in progress');
       return;
     }
@@ -178,10 +260,15 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         '${ApiUrls.anilistAuth}'
         '?client_id=$_anilistClientId'
         '&redirect_uri=${Uri.encodeComponent(_redirectUri)}'
-        '&response_type=token',
+        '&response_type=code',
       );
 
+      // Start the callback server BEFORE opening the browser.
+      final callbackFuture = _waitForOAuthCallback();
+
       if (!await launchUrl(authUrl, mode: LaunchMode.externalApplication)) {
+        await _activeServer?.close(force: true);
+        _activeServer = null;
         state = state.copyWith(
           isLoading: false,
           error: 'Could not open browser for AniList login.',
@@ -189,9 +276,8 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         return;
       }
 
-      // Wait for the deep-link redirect
-      final redirectUri = await _waitForRedirect();
-      if (redirectUri == null) {
+      final callbackUri = await callbackFuture;
+      if (callbackUri == null) {
         state = state.copyWith(
           isLoading: false,
           error: 'AniList login timed out or was cancelled.',
@@ -199,16 +285,39 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         return;
       }
 
-      // AniList returns the token in the URI fragment (#access_token=...)
-      // app_links surfaces the fragment as the `fragment` property.
-      final fragment = redirectUri.fragment;
-      final params = Uri.splitQueryString(fragment);
-      final token = params['access_token'];
+      final code = callbackUri.queryParameters['code'];
+      if (code == null) {
+        state = state.copyWith(
+          isLoading: false,
+          error: 'AniList did not return an authorization code.',
+        );
+        return;
+      }
 
+      // Exchange code for access token
+      final tokenResp = await _dio.post(
+        ApiUrls.anilistToken,
+        data: jsonEncode({
+          'grant_type': 'authorization_code',
+          'client_id': _anilistClientId,
+          'client_secret': _anilistClientSecret,
+          'redirect_uri': _redirectUri,
+          'code': code,
+        }),
+        options: Options(
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+        ),
+      );
+
+      final tokenBody = tokenResp.data as Map<String, dynamic>?;
+      final token = tokenBody?['access_token'] as String?;
       if (token == null) {
         state = state.copyWith(
           isLoading: false,
-          error: 'AniList did not return an access token.',
+          error: 'AniList token exchange failed.',
         );
         return;
       }
@@ -221,11 +330,7 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
       if (username != null) {
         await _secureStorage.write(key: _kAnilistUsername, value: username);
       }
-      // Store username (non-sensitive) in DB for display
-      await _upsertDbAccount(
-        service: 'anilist',
-        username: username,
-      );
+      await _upsertDbAccount(service: 'anilist', username: username);
 
       state = state.copyWith(
         isLoading: false,
@@ -273,8 +378,7 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
   // ── MAL OAuth (PKCE) ────────────────────────────────────────────
 
   Future<void> connectMal() async {
-    // Guard against concurrent OAuth flows
-    if (_oauthCompleter != null && !_oauthCompleter!.isCompleted) {
+    if (_activeServer != null) {
       debugPrint('TrackingService: OAuth flow already in progress');
       return;
     }
@@ -297,7 +401,12 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         '&code_challenge_method=plain',
       );
 
+      // Start the callback server BEFORE opening the browser.
+      final callbackFuture = _waitForOAuthCallback();
+
       if (!await launchUrl(authUrl, mode: LaunchMode.externalApplication)) {
+        await _activeServer?.close(force: true);
+        _activeServer = null;
         state = state.copyWith(
           isLoading: false,
           error: 'Could not open browser for MAL login.',
@@ -305,8 +414,8 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         return;
       }
 
-      final redirectUri = await _waitForRedirect();
-      if (redirectUri == null) {
+      final callbackUri = await callbackFuture;
+      if (callbackUri == null) {
         state = state.copyWith(
           isLoading: false,
           error: 'MAL login timed out or was cancelled.',
@@ -314,7 +423,7 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         return;
       }
 
-      final code = redirectUri.queryParameters['code'];
+      final code = callbackUri.queryParameters['code'];
       if (code == null) {
         state = state.copyWith(
           isLoading: false,
@@ -363,11 +472,7 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
       // Clean up verifier — no longer needed after token exchange
       await _secureStorage.delete(key: _kMalVerifier);
 
-      // Store username (non-sensitive) in DB for display
-      await _upsertDbAccount(
-        service: 'mal',
-        username: username,
-      );
+      await _upsertDbAccount(service: 'mal', username: username);
 
       state = state.copyWith(
         isLoading: false,
