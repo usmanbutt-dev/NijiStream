@@ -40,6 +40,7 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
           flutter build apk --release
 
       - name: Rename artifact
@@ -66,6 +67,7 @@ jobs:
       - name: Build Windows
         run: |
           flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
           flutter build windows --release
 
       - name: Create ZIP
@@ -109,6 +111,7 @@ jobs:
       - name: Build Linux
         run: |
           flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
           flutter build linux --release
 
       - name: Create tar.gz
