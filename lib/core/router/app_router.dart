@@ -78,7 +78,15 @@ const navDestinations = [
   ),
 ];
 
+/// Root navigator key — used by full-screen routes (anime detail, settings
+/// sub-pages) to ensure they push on the root navigator, not the shell's
+/// nested navigator. Without this, `context.push()` from inside a ShellRoute
+/// child may push on the shell's navigator, keeping the sidebar/bottom nav
+/// visible but unresponsive.
+final _rootNavigatorKey = GlobalKey<NavigatorState>();
+
 final appRouter = GoRouter(
+  navigatorKey: _rootNavigatorKey,
   initialLocation: RoutePaths.home,
   routes: [
     // ── ShellRoute wraps all top-level tabs with the navigation scaffold ──
@@ -122,6 +130,7 @@ final appRouter = GoRouter(
 
     // ── Anime Detail (full-screen, outside shell) ──
     GoRoute(
+      parentNavigatorKey: _rootNavigatorKey,
       path: '/anime/:extensionId/:animeId',
       builder: (context, state) {
         // Decode in case the caller URL-encoded the IDs (e.g. IDs with slashes).
@@ -138,12 +147,14 @@ final appRouter = GoRouter(
 
     // ── Extension Management ──
     GoRoute(
+      parentNavigatorKey: _rootNavigatorKey,
       path: '/settings/extensions',
       builder: (context, state) => const ExtensionManagementScreen(),
     ),
 
     // ── Tracking Accounts ──
     GoRoute(
+      parentNavigatorKey: _rootNavigatorKey,
       path: '/settings/tracking',
       builder: (context, state) => const TrackingAccountsScreen(),
     ),

@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/colors.dart';
 import '../../data/services/tracking_service.dart';
+import '../../data/services/tracking_sync_service.dart';
 
 class TrackingAccountsScreen extends ConsumerWidget {
   const TrackingAccountsScreen({super.key});
@@ -17,6 +18,11 @@ class TrackingAccountsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final tracking = ref.watch(trackingProvider);
     final notifier = ref.read(trackingProvider.notifier);
+    final syncStatus = ref.watch(trackingSyncProvider);
+    final syncService = ref.read(trackingSyncProvider.notifier);
+
+    final hasConnected =
+        tracking.anilistConnected || tracking.malConnected;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Tracking Accounts')),
@@ -70,6 +76,15 @@ class TrackingAccountsScreen extends ConsumerWidget {
                 ? 'Client ID not configured'
                 : null,
           ),
+
+          // ── Sync section ──
+          if (hasConnected) ...[
+            const Divider(height: 1),
+            _SyncSection(
+              syncStatus: syncStatus,
+              onSyncAll: syncService.syncAll,
+            ),
+          ],
 
           const SizedBox(height: 24),
 
@@ -292,6 +307,91 @@ class _MALLogo extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Sync Section
+// ═══════════════════════════════════════════════════════════════════
+
+class _SyncSection extends StatelessWidget {
+  final SyncStatus syncStatus;
+  final VoidCallback onSyncAll;
+
+  const _SyncSection({
+    required this.syncStatus,
+    required this.onSyncAll,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.sync_rounded,
+                  color: NijiColors.primary, size: 20),
+              const SizedBox(width: 8),
+              Text('Library Sync', style: theme.textTheme.titleSmall),
+              const Spacer(),
+              if (syncStatus.isSyncing)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 6),
+                  ),
+                  onPressed: onSyncAll,
+                  icon: const Icon(Icons.sync_rounded, size: 16),
+                  label:
+                      const Text('Sync Now', style: TextStyle(fontSize: 12)),
+                ),
+            ],
+          ),
+          if (syncStatus.lastResult != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              syncStatus.lastResult!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: syncStatus.lastResult!.contains('failed')
+                    ? NijiColors.error
+                    : NijiColors.success,
+              ),
+            ),
+          ],
+          if (syncStatus.lastSyncTime != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Last synced: ${_formatTime(syncStatus.lastSyncTime!)}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: NijiColors.textTertiary,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _formatTime(DateTime time) {
+    final now = DateTime.now();
+    final diff = now.difference(time);
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    return '${time.day}/${time.month}/${time.year}';
   }
 }
 

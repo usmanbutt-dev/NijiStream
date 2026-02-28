@@ -29,6 +29,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/constants.dart';
 import '../database/app_database.dart';
 import '../database/database_provider.dart';
+import 'tracking_sync_service.dart';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -142,11 +143,13 @@ class TrackingAccountState {
 
 class TrackingNotifier extends StateNotifier<TrackingAccountState> {
   final AppDatabase _db;
+  final TrackingSyncService _syncService;
   final _dio = Dio();
 
   HttpServer? _activeServer;
 
-  TrackingNotifier(this._db) : super(const TrackingAccountState()) {
+  TrackingNotifier(this._db, this._syncService)
+      : super(const TrackingAccountState()) {
     _loadStoredAccounts();
   }
 
@@ -337,6 +340,11 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         anilistConnected: true,
         anilistUsername: username,
       );
+
+      // Auto-sync: pull user's anime list from AniList
+      _syncService.pullFromAnilist(token).then((_) {
+        _syncService.processQueue();
+      });
     } catch (e) {
       state = state.copyWith(isLoading: false, error: 'AniList error: $e');
     }
@@ -479,6 +487,11 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
         malConnected: true,
         malUsername: username,
       );
+
+      // Auto-sync: pull user's anime list from MAL
+      _syncService.pullFromMal(accessToken).then((_) {
+        _syncService.processQueue();
+      });
     } catch (e) {
       state = state.copyWith(isLoading: false, error: 'MAL error: $e');
     }
@@ -543,5 +556,6 @@ class TrackingNotifier extends StateNotifier<TrackingAccountState> {
 
 final trackingProvider =
     StateNotifierProvider<TrackingNotifier, TrackingAccountState>((ref) {
-  return TrackingNotifier(ref.read(databaseProvider));
+  final syncService = ref.read(trackingSyncProvider.notifier);
+  return TrackingNotifier(ref.read(databaseProvider), syncService);
 });

@@ -22,6 +22,7 @@ import '../../core/theme/colors.dart';
 import '../../core/utils/error_utils.dart';
 import '../../core/utils/hls_utils.dart';
 import '../../data/repositories/library_repository.dart';
+import '../../data/services/tracking_sync_service.dart';
 import '../../data/services/watch_progress_service.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
@@ -308,6 +309,13 @@ class _VideoPlayerScreenState extends ConsumerState<VideoPlayerScreen> {
           extensionId: widget.extensionId,
           animeId: widget.animeId,
           newProgress: widget.episodeNumber,
+        );
+
+    // Push progress to connected tracking services (AniList/MAL).
+    ref.read(trackingSyncProvider.notifier).onEpisodeCompleted(
+          extensionId: widget.extensionId,
+          animeId: widget.animeId,
+          episodeNumber: widget.episodeNumber,
         );
 
     // Auto-play next episode if available.
@@ -776,13 +784,33 @@ class _BottomBar extends StatelessWidget {
 
                 const Spacer(),
 
-                // Subtitle selector
+                // Subtitle selector (always visible)
                 if (subtitles.isNotEmpty)
                   _SubtitleButton(
                     selectedSubtitle: selectedSubtitle,
                     subtitles: subtitles,
                     onSubtitleSelected: onSubtitleSelected,
                     onSubtitlesOff: onSubtitlesOff,
+                  )
+                else
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white54,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    icon: const Icon(Icons.closed_caption_off_rounded,
+                        size: 18),
+                    label: const Text('CC',
+                        style: TextStyle(fontSize: 12)),
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('No subtitles available for this source'),
+                          behavior: SnackBarBehavior.floating,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
                   ),
 
                 // Quality selector (always visible)

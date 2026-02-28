@@ -5,6 +5,9 @@
 /// to the user's library with a status selector.
 library;
 
+import 'dart:convert';
+
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -17,8 +20,10 @@ import '../../data/database/app_database.dart';
 import '../../data/database/database_provider.dart';
 import '../../data/repositories/library_repository.dart';
 import '../../data/services/download_service.dart';
+import '../../data/services/tracking_sync_service.dart';
 import '../../extensions/api/extension_api.dart';
 import '../../extensions/models/extension_manifest.dart';
+import '../../extensions/repository/extension_repository.dart';
 import '../player/video_player_screen.dart';
 
 class AnimeDetailScreen extends ConsumerStatefulWidget {
@@ -40,10 +45,21 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
   bool _isLoading = true;
   String? _error;
 
+  /// Effective extension/anime IDs — may differ from widget params when a
+  /// tracking-imported anime is resolved to a real extension.
+  late String _effectiveExtensionId = widget.extensionId;
+  late String _effectiveAnimeId = widget.animeId;
+
   @override
   void initState() {
     super.initState();
     _loadDetail();
+  }
+
+  /// Whether the widget's extensionId is a tracking source (not a real extension).
+  bool get _isTrackingSource {
+    const trackingSources = {'_tracking', 'anilist', 'mal'};
+    return trackingSources.contains(widget.extensionId);
   }
 
   Future<void> _loadDetail() async {
@@ -54,7 +70,16 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
 
     try {
       final repo = ref.read(extensionRepositoryProvider);
-      final detail = await repo.getDetail(widget.extensionId, widget.animeId);
+
+      // If this is a tracking-imported anime, search installed extensions
+      // for a match so we can show episodes and enable streaming.
+      if (_isTrackingSource || !repo.isLoaded(widget.extensionId)) {
+        final resolved = await _resolveViaExtensionSearch(repo);
+        if (resolved) return; // _detail was set inside
+      }
+
+      final detail = await repo.getDetail(
+          _effectiveExtensionId, _effectiveAnimeId);
       if (mounted) {
         setState(() {
           _detail = detail;
@@ -69,6 +94,93 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
         });
       }
     }
+  }
+
+  /// Search all loaded extensions for this anime's title.
+  /// If a match is found, load the detail from that extension.
+  /// Returns true if a match was found and _detail was set.
+  Future<bool> _resolveViaExtensionSearch(ExtensionRepository repo) async {
+    // Get the anime title from the local DB
+    final db = ref.read(databaseProvider);
+    final dbId = '${widget.extensionId}:${widget.animeId}';
+    final anime = await db.getAnimeById(dbId);
+    if (anime == null) return false;
+
+    // Search all loaded extensions for this title
+    final searchResults = await repo.searchAll(anime.title, 1);
+
+    // Find the best match across all extensions
+    final normalizedTitle = anime.title.toLowerCase().trim();
+    for (final entry in searchResults.entries) {
+      for (final result in entry.value.results) {
+        if (result.title.toLowerCase().trim() == normalizedTitle) {
+          // Exact title match — load detail from this extension
+          _effectiveExtensionId = entry.key;
+          _effectiveAnimeId = result.id;
+          final detail =
+              await repo.getDetail(_effectiveExtensionId, _effectiveAnimeId);
+          if (mounted && detail != null) {
+            // Also update the anime record in DB so future opens skip the search
+            await db.upsertAnime(AnimeTableCompanion(
+              id: Value(dbId),
+              extensionId: Value(anime.extensionId),
+              title: Value(anime.title),
+              coverUrl: Value(detail.coverUrl ?? anime.coverUrl),
+              bannerUrl: Value(detail.bannerUrl ?? anime.bannerUrl),
+              synopsis: Value(detail.synopsis ?? anime.synopsis),
+              anilistId: Value(anime.anilistId),
+              malId: Value(anime.malId),
+              updatedAt: Value(
+                  DateTime.now().millisecondsSinceEpoch ~/ 1000),
+            ));
+            setState(() {
+              _detail = detail;
+              _isLoading = false;
+            });
+            return true;
+          }
+        }
+      }
+    }
+
+    // No exact match — try partial match (contains)
+    for (final entry in searchResults.entries) {
+      if (entry.value.results.isNotEmpty) {
+        // Use the first result from the first extension that returned results
+        final result = entry.value.results.first;
+        _effectiveExtensionId = entry.key;
+        _effectiveAnimeId = result.id;
+        final detail =
+            await repo.getDetail(_effectiveExtensionId, _effectiveAnimeId);
+        if (mounted && detail != null) {
+          setState(() {
+            _detail = detail;
+            _isLoading = false;
+          });
+          return true;
+        }
+      }
+    }
+
+    // No extensions matched — show cached data from DB
+    if (mounted) {
+      final genres = anime.genres != null
+          ? (jsonDecode(anime.genres!) as List<dynamic>)
+              .cast<String>()
+          : <String>[];
+      setState(() {
+        _detail = ExtensionAnimeDetail(
+          title: anime.title,
+          coverUrl: anime.coverUrl,
+          bannerUrl: anime.bannerUrl,
+          synopsis: anime.synopsis,
+          genres: genres,
+          status: anime.status,
+        );
+        _isLoading = false;
+      });
+    }
+    return true;
   }
 
   void _showLibrarySheet(UserLibraryTableData? currentEntry) {
@@ -92,6 +204,12 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
             detail: detail,
             status: status,
           );
+          // Push status change to connected trackers (AniList/MAL)
+          ref.read(trackingSyncProvider.notifier).onStatusChanged(
+                extensionId: widget.extensionId,
+                animeId: widget.animeId,
+                status: status,
+              );
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -105,6 +223,11 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
         onRemove: currentEntry != null
             ? () async {
                 Navigator.pop(ctx);
+                // Push removal to connected trackers before deleting locally
+                ref.read(trackingSyncProvider.notifier).onRemovedFromLibrary(
+                      extensionId: widget.extensionId,
+                      animeId: widget.animeId,
+                    );
                 await ref.read(libraryRepositoryProvider).removeFromLibrary(
                       extensionId: widget.extensionId,
                       animeId: widget.animeId,
@@ -263,7 +386,7 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
                   final metadataOnly = _isMetadataOnlyEpisodeId(episode.id);
                   return _EpisodeTile(
                     episode: episode,
-                    extensionId: widget.extensionId,
+                    extensionId: _effectiveExtensionId,
                     animeTitle: detail.title,
                     coverUrl: detail.coverUrl,
                     theme: theme,
@@ -288,8 +411,8 @@ class _AnimeDetailScreenState extends ConsumerState<AnimeDetailScreen> {
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => VideoPlayerScreen(
-                            extensionId: widget.extensionId,
-                            animeId: widget.animeId,
+                            extensionId: _effectiveExtensionId,
+                            animeId: _effectiveAnimeId,
                             episodeId: episode.id,
                             animeTitle: detail.title,
                             episodeNumber: episode.number,

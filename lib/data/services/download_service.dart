@@ -33,6 +33,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/constants.dart';
 import '../../extensions/models/extension_manifest.dart';
+import '../../features/settings/settings_screen.dart';
 import '../database/app_database.dart';
 import '../database/database_provider.dart';
 import 'ffmpeg_service.dart';
@@ -44,6 +45,7 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
   final service = DownloadService(
     ref.read(databaseProvider),
     ref.read(ffmpegServiceProvider),
+    ref,
   );
   ref.onDispose(service.dispose);
   return service;
@@ -54,13 +56,14 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
 class DownloadService {
   final AppDatabase _db;
   final FfmpegService _ffmpeg;
+  final Ref _ref;
   final _dio = Dio();
   final _activeTokens = <int, CancelToken>{};
   final _taskHeaders = <int, Map<String, String>>{};
   final _taskSubtitles = <int, List<ExtensionSubtitle>>{};
   int _runningCount = 0;
 
-  DownloadService(this._db, this._ffmpeg);
+  DownloadService(this._db, this._ffmpeg, this._ref);
 
   void dispose() {
     for (final token in _activeTokens.values) {
@@ -95,8 +98,8 @@ class DownloadService {
       return null; // already queued or in progress
     }
 
-    final dir = await _downloadDir();
-    final fileName = _safeFilename(episodeId, url);
+    final dir = await _downloadDir(animeTitle: animeTitle);
+    final fileName = _safeFilename(episodeId, url, episodeNumber: episodeNumber);
     final filePath = p.join(dir.path, fileName);
 
     int taskId;
@@ -179,6 +182,8 @@ class DownloadService {
       // Delete partial file
       final file = File(task.filePath);
       if (await file.exists()) await file.delete();
+      // Clean up empty anime folder
+      await _cleanupEmptyParent(file.parent);
     }
     await _db.deleteDownloadTask(taskId);
   }
@@ -186,12 +191,14 @@ class DownloadService {
   // ── Queue processing ────────────────────────────────────────────
 
   Future<void> _processQueue() async {
-    if (_runningCount >= AppConstants.defaultConcurrentDownloads) return;
+    final maxConcurrent =
+        _ref.read(downloadSettingsProvider).concurrentDownloads;
+    if (_runningCount >= maxConcurrent) return;
 
     final queued = await (_db.select(_db.downloadTasksTable)
           ..where((t) => t.status.equals(DownloadStatus.queued))
           ..orderBy([(t) => OrderingTerm.asc(t.createdAt)])
-          ..limit(AppConstants.defaultConcurrentDownloads - _runningCount))
+          ..limit(maxConcurrent - _runningCount))
         .get();
 
     for (final task in queued) {
@@ -212,10 +219,11 @@ class DownloadService {
     await _setStatus(task.id, DownloadStatus.downloading);
 
     try {
-      final dir = await _downloadDir();
+      final dir = await _downloadDir(animeTitle: task.animeTitle);
       final file = File(task.filePath.isNotEmpty
           ? task.filePath
-          : p.join(dir.path, _safeFilename(task.episodeId, task.url)));
+          : p.join(dir.path, _safeFilename(task.episodeId, task.url,
+              episodeNumber: task.episodeNumber)));
 
       await _dio.download(
         task.url,
@@ -260,9 +268,8 @@ class DownloadService {
     await _setStatus(task.id, DownloadStatus.downloading);
 
     try {
-      final dir = await _downloadDir();
-      final safe = task.episodeId.replaceAll(RegExp(r'[^\w]'), '_');
-      final baseName = safe.substring(0, safe.length.clamp(0, 80));
+      final dir = await _downloadDir(animeTitle: task.animeTitle);
+      final baseName = _safeBaseName(task.episodeId, task.episodeNumber);
       final headers = _taskHeaders.remove(task.id);
 
       // Pure Dart HLS downloader first — handles headers reliably.
@@ -402,17 +409,63 @@ class DownloadService {
     ));
   }
 
-  Future<Directory> _downloadDir() async {
-    final base = await getApplicationDocumentsDirectory();
-    final dir = Directory(p.join(base.path, 'NijiStream', 'downloads'));
+  Future<Directory> _downloadDir({String? animeTitle}) async {
+    final settings = _ref.read(downloadSettingsProvider);
+    final String basePath;
+    if (settings.downloadPath != null && settings.downloadPath!.isNotEmpty) {
+      basePath = settings.downloadPath!;
+    } else {
+      final base = await getApplicationDocumentsDirectory();
+      basePath = p.join(base.path, 'NijiStream', 'downloads');
+    }
+
+    final String dirPath;
+    if (animeTitle != null && animeTitle.isNotEmpty) {
+      final safeTitle = _sanitizeDirName(animeTitle);
+      dirPath = p.join(basePath, safeTitle);
+    } else {
+      dirPath = basePath;
+    }
+
+    final dir = Directory(dirPath);
     if (!await dir.exists()) await dir.create(recursive: true);
     return dir;
   }
 
-  /// Build a safe filename from the episode id and URL.
-  String _safeFilename(String episodeId, String url) {
+  /// Build a clean filename from episode number, falling back to episode ID.
+  String _safeFilename(String episodeId, String url, {int? episodeNumber}) {
     final ext = _isHlsUrl(url) ? '.ts' : p.extension(Uri.parse(url).path);
+    final finalExt = ext.isEmpty ? '.mp4' : ext;
+    final baseName = _safeBaseName(episodeId, episodeNumber);
+    return '$baseName$finalExt';
+  }
+
+  /// Base name without extension — used by HLS downloads too.
+  String _safeBaseName(String episodeId, int? episodeNumber) {
+    if (episodeNumber != null) {
+      return 'Episode ${episodeNumber.toString().padLeft(3, '0')}';
+    }
     final safe = episodeId.replaceAll(RegExp(r'[^\w]'), '_');
-    return '${safe.substring(0, safe.length.clamp(0, 80))}${ext.isEmpty ? '.mp4' : ext}';
+    return safe.substring(0, safe.length.clamp(0, 80));
+  }
+
+  /// Sanitize an anime title for use as a directory name.
+  String _sanitizeDirName(String name) {
+    // Remove characters invalid in file/dir names on Windows + Unix.
+    return name
+        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  /// Delete an anime folder if it's empty after a file was removed.
+  Future<void> _cleanupEmptyParent(Directory dir) async {
+    try {
+      if (!await dir.exists()) return;
+      final remaining = await dir.list().length;
+      if (remaining == 0) await dir.delete();
+    } catch (_) {
+      // Non-fatal.
+    }
   }
 }

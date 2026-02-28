@@ -1,13 +1,20 @@
 /// NijiStream — Settings screen.
 library;
 
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants.dart';
 import '../../core/theme/colors.dart';
+import '../../data/database/database_provider.dart';
+import '../../data/services/tracking_service.dart';
 
 // ── Player settings provider ─────────────────────────────────────────────────
 
@@ -44,6 +51,59 @@ class PlayerSettingsNotifier extends StateNotifier<PlayerSettings> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kDefaultQuality, quality);
     state = PlayerSettings(defaultQuality: quality);
+  }
+}
+
+// ── Download settings provider ───────────────────────────────────────────────
+
+const _kDownloadPath = 'download_path';
+const _kConcurrentDownloads = 'download_concurrent';
+
+/// Public provider — accessed by the download service.
+final downloadSettingsProvider =
+    StateNotifierProvider<DownloadSettingsNotifier, DownloadSettings>((ref) {
+  return DownloadSettingsNotifier();
+});
+
+class DownloadSettings {
+  final String? downloadPath;
+  final int concurrentDownloads;
+  const DownloadSettings({this.downloadPath, this.concurrentDownloads = 2});
+}
+
+class DownloadSettingsNotifier extends StateNotifier<DownloadSettings> {
+  DownloadSettingsNotifier() : super(const DownloadSettings()) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = DownloadSettings(
+      downloadPath: prefs.getString(_kDownloadPath),
+      concurrentDownloads: prefs.getInt(_kConcurrentDownloads) ?? 2,
+    );
+  }
+
+  Future<void> setDownloadPath(String? path) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (path != null) {
+      await prefs.setString(_kDownloadPath, path);
+    } else {
+      await prefs.remove(_kDownloadPath);
+    }
+    state = DownloadSettings(
+      downloadPath: path,
+      concurrentDownloads: state.concurrentDownloads,
+    );
+  }
+
+  Future<void> setConcurrentDownloads(int count) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_kConcurrentDownloads, count);
+    state = DownloadSettings(
+      downloadPath: state.downloadPath,
+      concurrentDownloads: count,
+    );
   }
 }
 
@@ -199,14 +259,109 @@ class SettingsScreen extends ConsumerWidget {
           // ── Downloads section ──
           _SectionHeader(title: 'Downloads', theme: theme),
           _SettingsTile(
-            icon: Icons.folder_rounded,
+            icon: Icons.speed_rounded,
             title: 'Concurrent Downloads',
-            subtitle: '${AppConstants.defaultConcurrentDownloads} simultaneous downloads',
+            subtitle:
+                '${ref.watch(downloadSettingsProvider).concurrentDownloads} simultaneous downloads',
+            trailing: DropdownButton<int>(
+              value: ref.watch(downloadSettingsProvider).concurrentDownloads,
+              underline: const SizedBox.shrink(),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
+              items: [1, 2, 3, 4, 5]
+                  .map((n) => DropdownMenuItem(value: n, child: Text('$n')))
+                  .toList(),
+              onChanged: (n) {
+                if (n != null) {
+                  ref
+                      .read(downloadSettingsProvider.notifier)
+                      .setConcurrentDownloads(n);
+                }
+              },
+            ),
+            onTap: null,
+          ),
+          _SettingsTile(
+            icon: Icons.folder_rounded,
+            title: 'Download Location',
+            subtitle: ref.watch(downloadSettingsProvider).downloadPath ??
+                'Default (App Documents)',
             trailing: const Icon(
               Icons.chevron_right_rounded,
               color: NijiColors.textTertiary,
             ),
-            onTap: () => _showDownloadSettingsDialog(context),
+            onTap: () => _showDownloadLocationDialog(context, ref),
+          ),
+          const Divider(),
+
+          // ── Data Management section ──
+          _SectionHeader(title: 'Data Management', theme: theme),
+          _SettingsTile(
+            icon: Icons.delete_sweep_rounded,
+            title: 'Clear Downloads',
+            subtitle: 'Remove all download tasks and files',
+            trailing: const Icon(Icons.chevron_right_rounded,
+                color: NijiColors.textTertiary),
+            onTap: () => _confirmAction(
+              context,
+              ref,
+              title: 'Clear Downloads?',
+              message:
+                  'All download tasks and downloaded files will be deleted.',
+              action: () => _clearDownloads(ref),
+            ),
+          ),
+          _SettingsTile(
+            icon: Icons.link_off_rounded,
+            title: 'Disconnect AniList & Clear Data',
+            subtitle: 'Remove AniList account and all imported anime',
+            trailing: const Icon(Icons.chevron_right_rounded,
+                color: NijiColors.textTertiary),
+            onTap: () => _confirmAction(
+              context,
+              ref,
+              title: 'Disconnect AniList?',
+              message:
+                  'Your AniList account will be disconnected and all anime '
+                  'imported from AniList will be removed from your library.',
+              action: () => _disconnectAndClear(ref, 'anilist'),
+            ),
+          ),
+          _SettingsTile(
+            icon: Icons.link_off_rounded,
+            title: 'Disconnect MAL & Clear Data',
+            subtitle: 'Remove MAL account and all imported anime',
+            trailing: const Icon(Icons.chevron_right_rounded,
+                color: NijiColors.textTertiary),
+            onTap: () => _confirmAction(
+              context,
+              ref,
+              title: 'Disconnect MyAnimeList?',
+              message:
+                  'Your MAL account will be disconnected and all anime '
+                  'imported from MAL will be removed from your library.',
+              action: () => _disconnectAndClear(ref, 'mal'),
+            ),
+          ),
+          _SettingsTile(
+            icon: Icons.warning_amber_rounded,
+            title: 'Clear Everything',
+            subtitle:
+                'Remove all data: library, downloads, accounts, progress',
+            trailing: const Icon(Icons.chevron_right_rounded,
+                color: NijiColors.error),
+            onTap: () => _confirmAction(
+              context,
+              ref,
+              title: 'Clear All Data?',
+              message:
+                  'This will delete your entire library, all downloads, '
+                  'watch progress, and disconnect all tracking accounts. '
+                  'This cannot be undone.',
+              isDangerous: true,
+              action: () => _clearEverything(ref),
+            ),
           ),
           const Divider(),
 
@@ -336,30 +491,20 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  void _showDownloadSettingsDialog(BuildContext context) {
+  void _showDownloadLocationDialog(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final notifier = ref.read(downloadSettingsProvider.notifier);
+    final current = ref.read(downloadSettingsProvider).downloadPath;
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: NijiColors.surface,
-        title: const Text('Download Settings'),
+        title: const Text('Download Location'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.speed_rounded,
-                  color: NijiColors.textSecondary),
-              title: const Text('Concurrent Downloads'),
-              subtitle: Text(
-                '${AppConstants.defaultConcurrentDownloads} simultaneous',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: NijiColors.textTertiary,
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -367,11 +512,48 @@ class SettingsScreen extends ConsumerWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                'Downloads are saved to app documents folder under NijiStream/downloads/.',
+                current ?? 'Default (App Documents/NijiStream/downloads)',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: NijiColors.textSecondary,
                   height: 1.5,
                 ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () async {
+                      final path =
+                          await FilePicker.platform.getDirectoryPath();
+                      if (path != null) {
+                        await notifier.setDownloadPath(path);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      }
+                    },
+                    icon: const Icon(Icons.folder_open_rounded, size: 18),
+                    label: const Text('Choose Folder'),
+                  ),
+                ),
+                if (current != null) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () async {
+                      await notifier.setDownloadPath(null);
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+                    child: const Text('Reset'),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Only affects new downloads. Existing files stay where they are.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: NijiColors.textTertiary,
+                fontSize: 11,
               ),
             ),
           ],
@@ -430,6 +612,117 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  void _confirmAction(
+    BuildContext context,
+    WidgetRef ref, {
+    required String title,
+    required String message,
+    required Future<void> Function() action,
+    bool isDangerous = false,
+  }) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: NijiColors.surface,
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: isDangerous
+                ? FilledButton.styleFrom(backgroundColor: NijiColors.error)
+                : null,
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                await action();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Done')),
+                  );
+                }
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Error: $e')),
+                  );
+                }
+              }
+            },
+            child: Text(isDangerous ? 'Delete' : 'Confirm'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _clearDownloads(WidgetRef ref) async {
+    final db = ref.read(databaseProvider);
+    await db.deleteAllDownloadTasks();
+    // Delete downloaded files from disk.
+    try {
+      for (final dirPath in await _downloadDirs(ref)) {
+        final dir = Directory(dirPath);
+        if (await dir.exists()) await dir.delete(recursive: true);
+      }
+    } catch (_) {
+      // Non-fatal — DB records already cleared.
+    }
+  }
+
+  Future<void> _disconnectAndClear(WidgetRef ref, String service) async {
+    final db = ref.read(databaseProvider);
+    final notifier = ref.read(trackingProvider.notifier);
+    // Disconnect the account first.
+    if (service == 'anilist') {
+      await notifier.disconnectAnilist();
+    } else {
+      await notifier.disconnectMal();
+    }
+    // Remove all anime imported from that service.
+    await db.deleteTrackingData(service);
+  }
+
+  Future<void> _clearEverything(WidgetRef ref) async {
+    final db = ref.read(databaseProvider);
+    final notifier = ref.read(trackingProvider.notifier);
+    // Disconnect all tracking accounts.
+    final tracking = ref.read(trackingProvider);
+    if (tracking.anilistConnected) await notifier.disconnectAnilist();
+    if (tracking.malConnected) await notifier.disconnectMal();
+    // Wipe all DB data.
+    await db.deleteAllUserData();
+    // Delete downloaded files from disk.
+    try {
+      for (final dirPath in await _downloadDirs(ref)) {
+        final dir = Directory(dirPath);
+        if (await dir.exists()) await dir.delete(recursive: true);
+      }
+    } catch (_) {
+      // Non-fatal.
+    }
+    // Clear watch progress from SharedPreferences.
+    final prefs = await SharedPreferences.getInstance();
+    final wpKeys =
+        prefs.getKeys().where((k) => k.startsWith('niji_wp__')).toList();
+    for (final key in wpKeys) {
+      await prefs.remove(key);
+    }
+  }
+
+  /// Returns all download directories to clean up (custom + default).
+  Future<List<String>> _downloadDirs(WidgetRef ref) async {
+    final dirs = <String>[];
+    final customPath = ref.read(downloadSettingsProvider).downloadPath;
+    if (customPath != null) dirs.add(customPath);
+    final appDir = await getApplicationDocumentsDirectory();
+    dirs.add(p.join(appDir.path, 'NijiStream', 'downloads'));
+    return dirs;
   }
 
   void _showDisclaimerDialog(BuildContext context, ThemeData theme) {

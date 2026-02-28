@@ -65,6 +65,9 @@ dependencies:
   # Android: EncryptedSharedPreferences. Windows: DPAPI. Linux: libsecret.
   flutter_secure_storage: ^9.2.4
 
+  # File/folder picker (download location)
+  file_picker: ^8.1.7
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
