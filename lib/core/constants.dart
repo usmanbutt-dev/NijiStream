@@ -36,7 +36,7 @@ class AppConstants {
 
   static const String appName = 'NijiStream';
   static const String appTagline = 'Your anime, everywhere.';
-  static const String appVersion = '0.1.0';
+  static const String appVersion = '0.1.2';
   static const String githubUrl = 'https://github.com/nijistream/nijistream';
 
   /// Default number of concurrent downloads.
