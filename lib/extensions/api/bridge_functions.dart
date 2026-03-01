@@ -67,10 +67,10 @@ class BridgeFunctions {
           responseType: ResponseType.plain,
         ),
       );
-      return response.data ?? '';
+      return _sanitizeForJs(response.data ?? '');
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) return '{"error": "cancelled"}';
-      return '{"error": "${e.message}"}';
+      return '{"error": "${_escapeJsonValue(e.message ?? 'unknown error')}"}';
     }
   }
 
@@ -97,11 +97,46 @@ class BridgeFunctions {
           responseType: ResponseType.plain,
         ),
       );
-      return response.data ?? '';
+      return _sanitizeForJs(response.data ?? '');
     } on DioException catch (e) {
       if (e.type == DioExceptionType.cancel) return '{"error": "cancelled"}';
-      return '{"error": "${e.message}"}';
+      return '{"error": "${_escapeJsonValue(e.message ?? 'unknown error')}"}';
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Response sanitization
+  // ═══════════════════════════════════════════════════════════════════
+
+  /// Remove control characters (U+0000–U+001F except tab/LF/CR) and the
+  /// UTF-8 BOM (U+FEFF) from an HTTP response body. These break QuickJS's
+  /// strict JSON.parse even though many servers emit them.
+  static String _sanitizeForJs(String input) {
+    // Fast path: skip allocation if nothing needs stripping.
+    bool needsCleaning = false;
+    for (int i = 0; i < input.length; i++) {
+      final c = input.codeUnitAt(i);
+      if (c == 0xFEFF || (c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D)) {
+        needsCleaning = true;
+        break;
+      }
+    }
+    if (!needsCleaning) return input;
+
+    final buf = StringBuffer();
+    for (int i = 0; i < input.length; i++) {
+      final c = input.codeUnitAt(i);
+      // Drop BOM and non-printable control chars (keep \t \n \r).
+      if (c == 0xFEFF) continue;
+      if (c < 0x20 && c != 0x09 && c != 0x0A && c != 0x0D) continue;
+      buf.writeCharCode(c);
+    }
+    return buf.toString();
+  }
+
+  /// Escape characters that would break a JSON string value.
+  static String _escapeJsonValue(String input) {
+    return input.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
   }
 
   // ═══════════════════════════════════════════════════════════════════
