@@ -127,6 +127,7 @@ class DownloadService {
               url: Value(url),
               filePath: Value(filePath),
               status: const Value(DownloadStatus.queued),
+              createdAt: Value(DateTime.now().millisecondsSinceEpoch ~/ 1000),
             ),
           );
     }
@@ -159,12 +160,16 @@ class DownloadService {
     await _setStatus(taskId, DownloadStatus.paused);
   }
 
-  /// Resume a paused download.
+  /// Resume a paused or failed download.
   Future<void> resume(int taskId) async {
     final task = await (_db.select(_db.downloadTasksTable)
           ..where((t) => t.id.equals(taskId)))
         .getSingleOrNull();
-    if (task == null || task.status != DownloadStatus.paused) return;
+    if (task == null) return;
+    if (task.status != DownloadStatus.paused &&
+        task.status != DownloadStatus.failed) {
+      return;
+    }
 
     await _setStatus(taskId, DownloadStatus.queued);
     _processQueue();
@@ -179,12 +184,15 @@ class DownloadService {
           ..where((t) => t.id.equals(taskId)))
         .getSingleOrNull();
     if (task != null) {
-      // Delete partial file
-      final file = File(task.filePath);
-      if (await file.exists()) await file.delete();
-      // Clean up empty anime folder
-      await _cleanupEmptyParent(file.parent);
+      try {
+        final file = File(task.filePath);
+        if (await file.exists()) await file.delete();
+        await _cleanupEmptyParent(file.parent);
+      } catch (e) {
+        debugPrint('[DL] File cleanup failed for task $taskId: $e');
+      }
     }
+    // Always remove the DB row, even if file deletion failed.
     await _db.deleteDownloadTask(taskId);
   }
 
