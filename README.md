@@ -4,6 +4,8 @@
 
 NijiStream is an open-source, cross-platform anime streaming and management app built with Flutter. Browse, watch, track, and download anime — all from a single app on Android, Windows, and Linux.
 
+**[Explore the NijiStream website](https://usmanbutt-dev.github.io/NijiStream/)**
+
 ## Download
 
 [![Android](https://img.shields.io/badge/Android-APK-3DDC84?style=for-the-badge&logo=android&logoColor=white)](https://github.com/usmanbutt-dev/NijiStream/releases/latest/download/NijiStream-android.apk)
